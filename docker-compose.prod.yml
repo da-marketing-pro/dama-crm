@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # 1. PostgreSQL Database
+  # ==========================================
+  crm-db:
+    image: postgres:16-alpine
+    container_name: dama_crm_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-crm_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-crm_password_secure_2026}
+      POSTGRES_DB: ${DB_NAME:-crm_db}
+    volumes:
+      - crm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-crm_user} -d ${DB_NAME:-crm_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dama_network
+
+  # ==========================================
+  # 2. Redis Cache (для Evolution API v2)
+  # ==========================================
+  crm-redis:
+    image: redis:7-alpine
+    container_name: dama_crm_redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - crm_redis_data:/data
+    networks:
+      - dama_network
+
+  # ==========================================
+  # 3. Evolution API v2 (WhatsApp сервис)
+  # ==========================================
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    container_name: dama_evolution_api
+    restart: always
+    ports:
+      - "${EVOLUTION_PORT:-8080}:8080"
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - SERVER_URL=${EVOLUTION_API_URL:-http://localhost:8080}
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-dama_evo_api_key_secret_2026}
+      # Настройки хранения в PostgreSQL
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://${DB_USER:-crm_user}:${DB_PASSWORD:-crm_password_secure_2026}@crm-db:5432/${DB_NAME:-crm_db}?schema=evolution
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_v2
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_LABELS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - DATABASE_DELETE_MESSAGE=false
+      # Настройки кэша Redis
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://crm-redis:6379
+      - CACHE_REDIS_PREFIX_KEY=evolution-api:
+      - CACHE_REDIS_SAVE_INSTANCES=true
+      - CACHE_REDIS_TTL=3600
+      - CACHE_LOCAL_ENABLED=false
+      # Общие настройки
+      - LOG_LEVEL=ERROR,WARN,INFO
+      - LOG_COLOR=true
+      - CORS_ORIGIN=*
+      - CORS_METHODS=GET,POST,PUT,DELETE
+      - CORS_CREDENTIALS=true
+    volumes:
+      - crm_evolution_instances:/evolution/instances
+      - crm_evolution_store:/evolution/store
+    depends_on:
+      crm-db:
+        condition: service_healthy
+      crm-redis:
+        condition: service_started
+    networks:
+      - dama_network
+
+  # ==========================================
+  # 4. DAMA CRM (Next.js Standalone App)
+  # ==========================================
+  crm-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dama_crm_app
+    restart: always
+    ports:
+      - "${CRM_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-crm_user}:${DB_PASSWORD:-crm_password_secure_2026}@crm-db:5432/${DB_NAME:-crm_db}?schema=public
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-dama_nextauth_secret_key_change_in_production}
+      - CRON_SECRET=${CRON_SECRET:-dama_crm_cron_secret_token_secure_9921}
+      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@crm.local}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-admin123}
+      - WHATSAPP_API_URL=http://evolution-api:8080
+      - WHATSAPP_API_KEY=${EVOLUTION_API_KEY:-dama_evo_api_key_secret_2026}
+    depends_on:
+      crm-db:
+        condition: service_healthy
+      evolution-api:
+        condition: service_started
+    networks:
+      - dama_network
+
+volumes:
+  crm_db_data:
+    name: dama_crm_db_data
+  crm_redis_data:
+    name: dama_crm_redis_data
+  crm_evolution_instances:
+    name: dama_crm_evolution_instances
+  crm_evolution_store:
+    name: dama_crm_evolution_store
+
+networks:
+  dama_network:
+    name: dama_crm_network
+    driver: bridge

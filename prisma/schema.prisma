@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+}
+
+enum Currency {
+  KZT
+  USD
+  RUB
+}
+
+enum EntityType {
+  CONTACT
+  DEAL
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+}
+
+enum StageType {
+  OPEN
+  WON
+  LOST
+}
+
+enum WhatsappStatus {
+  CONNECTED
+  DISCONNECTED
+  QR_READY
+}
+
+enum WhatsappMessageType {
+  TEXT
+  IMAGE
+  DOCUMENT
+  AUDIO
+}
+
+enum ChartType {
+  NUMBER
+  LINE
+  PIE
+  BAR
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(MANAGER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignedContacts Contact[]         @relation("AssignedContacts")
+  assignedDeals    Deal[]            @relation("AssignedDeals")
+  assignedTasks    Task[]            @relation("AssignedTasks")
+  createdTasks     Task[]            @relation("CreatedTasks")
+  notes            ContactNote[]     @relation("AuthorNotes")
+  dashboardWidgets DashboardWidget[]
+
+  @@map("users")
+}
+
+model CurrencySetting {
+  id           String   @id @default(cuid())
+  baseCurrency Currency @default(KZT)
+  rateKzt      Float    @default(1.0)
+  rateUsd      Float    @default(495.0)
+  rateRub      Float    @default(5.2)
+  updatedAt    DateTime @updatedAt
+
+  @@map("currency_settings")
+}
+
+model Contact {
+  id           String   @id @default(cuid())
+  name         String
+  phone        String
+  email        String?
+  company      String?
+  assignedToId String?
+  assignedTo   User?    @relation("AssignedContacts", fields: [assignedToId], references: [id], onDelete: SetNull)
+  customFields Json?    @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  deals            Deal[]
+  payments         Payment[]
+  tasks            Task[]
+  whatsappMessages WhatsappMessage[]
+  notes            ContactNote[]
+
+  @@index([phone])
+  @@index([email])
+  @@index([assignedToId])
+  @@map("contacts")
+}
+
+model ContactNote {
+  id        String   @id @default(cuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation("AuthorNotes", fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([contactId])
+  @@index([authorId])
+  @@map("contact_notes")
+}
+
+model CustomFieldDefinition {
+  id         String     @id @default(cuid())
+  entityType EntityType @default(CONTACT)
+  name       String
+  fieldType  FieldType  @default(TEXT)
+  options    Json?      @default("[]")
+  isRequired Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+
+  @@index([entityType])
+  @@map("custom_field_definitions")
+}
+
+model Pipeline {
+  id        String   @id @default(cuid())
+  name      String
+  order     Int      @default(0)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stages Stage[]
+  deals  Deal[]
+
+  @@map("pipelines")
+}
+
+model Stage {
+  id         String    @id @default(cuid())
+  pipelineId String
+  pipeline   Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name       String
+  color      String    @default("#3388FF")
+  order      Int       @default(0)
+  type       StageType @default(OPEN)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  deals Deal[]
+
+  @@index([pipelineId])
+  @@map("stages")
+}
+
+model Deal {
+  id                    String    @id @default(cuid())
+  title                 String
+  contactId             String
+  contact               Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  pipelineId            String
+  pipeline              Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stageId               String
+  stage                 Stage     @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  assignedToId          String?
+  assignedTo            User?     @relation("AssignedDeals", fields: [assignedToId], references: [id], onDelete: SetNull)
+  totalBudget           Float     @default(0)
+  currency              Currency  @default(KZT)
+  exchangeRateAtCreation Float    @default(1.0)
+  customFields          Json?     @default("{}")
+  closedAt              DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  payments         Payment[]
+  tasks            Task[]
+  whatsappMessages WhatsappMessage[]
+
+  @@index([contactId])
+  @@index([pipelineId])
+  @@index([stageId])
+  @@index([assignedToId])
+  @@map("deals")
+}
+
+model Payment {
+  id                   String   @id @default(cuid())
+  dealId               String
+  deal                 Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contactId            String
+  contact              Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  amount               Float
+  currency             Currency @default(KZT)
+  amountInBaseCurrency Float
+  paymentDate          DateTime @default(now())
+  comment              String?
+  createdAt            DateTime @default(now())
+
+  @@index([dealId])
+  @@index([contactId])
+  @@map("payments")
+}
+
+model Task {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  taskType      String    @default("CALL")
+  dueDate       DateTime
+  isCompleted   Boolean   @default(false)
+  completedAt   DateTime?
+  resultComment String?
+  dealId        String?
+  deal          Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contactId     String?
+  contact       Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedToId  String
+  assignedTo    User      @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  createdById   String
+  createdBy     User      @relation("CreatedTasks", fields: [createdById], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([assignedToId])
+  @@index([dealId])
+  @@index([contactId])
+  @@map("tasks")
+}
+
+model WhatsappInstance {
+  id          String         @id @default(cuid())
+  name        String
+  phoneNumber String?
+  status      WhatsappStatus @default(DISCONNECTED)
+  apiUrl      String?
+  apiKey      String?
+  isDefault   Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  messages WhatsappMessage[]
+
+  @@map("whatsapp_instances")
+}
+
+model WhatsappMessage {
+  id          String              @id @default(cuid())
+  instanceId  String
+  instance    WhatsappInstance    @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  contactId   String?
+  contact     Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      String?
+  deal        Deal?               @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  remoteJid   String
+  fromMe      Boolean             @default(false)
+  senderName  String?
+  messageType WhatsappMessageType @default(TEXT)
+  textContent String?
+  mediaUrl    String?
+  fileName    String?
+  timestamp   DateTime            @default(now())
+  createdAt   DateTime            @default(now())
+
+  @@index([instanceId])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([remoteJid])
+  @@map("whatsapp_messages")
+}
+
+model DashboardWidget {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      String
+  metricType String
+  chartType  ChartType @default(NUMBER)
+  config     Json?     @default("{}")
+  order      Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("dashboard_widgets")
+}
