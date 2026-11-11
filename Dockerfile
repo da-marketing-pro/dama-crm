@@ -6,14 +6,19 @@ WORKDIR /app
 # 2. Dependencies stage
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci
+# Всегда устанавливаем devDependencies (typescript, tailwindcss и др.),
+# даже если сервер/Coolify передает NODE_ENV=production при сборке
+RUN npm ci --include=dev
 
 # 3. Builder stage
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Проверка целостности структуры перед сборкой
+RUN test -f tsconfig.json && test -d src/lib && test -d src/modules
 
 # Generate Prisma client
 RUN npx prisma generate
@@ -25,10 +30,10 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
 # Install prisma & tsx globally for startup migration & seeding script
 RUN npm install -g prisma@5.21.1 tsx@4.19.2
