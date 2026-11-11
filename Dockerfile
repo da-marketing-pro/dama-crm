@@ -35,14 +35,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Install prisma & tsx globally for startup migration & seeding script
-RUN npm install -g prisma@5.21.1 tsx@4.19.2
+# Install prisma & tsx globally matching lockfile versions
+RUN npm install -g prisma@5.22.0 tsx@4.23.15
 
-# Create secure system user
+# Create secure system user with home directory for prisma/npm cache
 RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN adduser --system --uid 1001 -h /home/nextjs nextjs
 
-# Copy Prisma schema and scripts
+# Copy Prisma schema and package.json
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./package.json
 
@@ -50,6 +50,9 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Copy dependencies needed by prisma/prod-init.ts (not traced directly into standalone node_modules)
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/bcryptjs ./node_modules/bcryptjs
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
