@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { WhatsappMessageType, WhatsappStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { processIncomingWhatsappWebhook } from "@/modules/whatsapp/actions";
+import { applyEvolutionLabelEvent } from "@/lib/whatsappFiltering";
 import {
   fetchMediaBase64FromEvolution,
   formatJidToPhone,
@@ -69,13 +70,42 @@ function toDataUri(raw: unknown, mimetype: string): string | undefined {
   return `data:${mimetype};base64,${trimmed}`;
 }
 
+function extractContextInfo(
+  msgItem: Record<string, unknown>,
+  rawMessage: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const candidates = [
+    rawMessage.extendedTextMessage,
+    rawMessage.imageMessage,
+    rawMessage.videoMessage,
+    rawMessage.documentMessage,
+    rawMessage.audioMessage,
+    rawMessage.pttMessage,
+    rawMessage.buttonsResponseMessage,
+    rawMessage.templateButtonReplyMessage,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object") {
+      const ctx = (candidate as Record<string, unknown>).contextInfo;
+      if (ctx && typeof ctx === "object") return ctx as Record<string, unknown>;
+    }
+  }
+  if (rawMessage.contextInfo && typeof rawMessage.contextInfo === "object") {
+    return rawMessage.contextInfo as Record<string, unknown>;
+  }
+  if (msgItem.contextInfo && typeof msgItem.contextInfo === "object") {
+    return msgItem.contextInfo as Record<string, unknown>;
+  }
+  return undefined;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
     // 1. Обработка событий Evolution API v2 (имеют поле event + data)
     if (typeof body?.event === "string") {
-      const normalizedEvent = body.event.toLowerCase().replace("_", ".");
+      const normalizedEvent = body.event.toLowerCase().replace(/_/g, ".");
       const instanceName = typeof body.instance === "string" ? body.instance : undefined;
       const instance = await resolveWhatsappInstance(instanceName);
 
@@ -109,7 +139,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, handled: "connection.update", state });
       }
 
-      // 1B. Игнорируем служебные события без ошибки, чтобы Evolution не ретраил вебхук
+      // 1B. События ярлыков WhatsApp Business (Вариант 4: Списки / Labels)
+      if (normalizedEvent === "labels.association" || normalizedEvent === "labels.edit") {
+        const labelResult = await applyEvolutionLabelEvent({
+          instance,
+          normalizedEvent,
+          data: (body.data || {}) as Record<string, unknown>,
+          senderFallback: typeof body.sender === "string" ? body.sender : undefined,
+        });
+        return NextResponse.json(labelResult);
+      }
+
+      // 1C. Игнорируем прочие служебные события без ошибки, чтобы Evolution не ретраил вебхук
       if (normalizedEvent !== "messages.upsert") {
         return NextResponse.json({ success: true, ignored: body.event });
       }
@@ -215,6 +256,15 @@ export async function POST(req: NextRequest) {
         if (evoMedia) mediaUrl = evoMedia;
       }
 
+      const contextInfo = extractContextInfo(msgItem, rawMessage);
+      const isFromAd = Boolean(
+        contextInfo &&
+          (contextInfo.externalAdReply ||
+            contextInfo.conversionSource ||
+            contextInfo.ctwaPayload ||
+            contextInfo.conversionData)
+      );
+
       // Пропускаем пустые системные уведомления без текста и медиа
       if (!textContent && !mediaUrl) {
         return NextResponse.json({ success: true, ignored: "unsupported_or_empty_message" });
@@ -229,6 +279,7 @@ export async function POST(req: NextRequest) {
         mediaUrl,
         fileName,
         instanceId: instance?.id,
+        isFromAd,
       });
 
       if (!result.success) {
@@ -274,6 +325,7 @@ export async function POST(req: NextRequest) {
       mediaUrl,
       fileName,
       instanceId: body.instanceId,
+      isFromAd: Boolean(body.isFromAd),
     });
 
     if (!result.success) {

@@ -1,4 +1,11 @@
 import { WhatsappMessageType, WhatsappStatus, StageType } from "@prisma/client";
+import type { LeadFilterMode } from "@/lib/whatsappFilterUtils";
+
+export interface WhatsappLabelItem {
+  id: string;
+  name: string;
+  color?: string;
+}
 
 export interface WhatsappInstanceData {
   id: string;
@@ -8,8 +15,45 @@ export interface WhatsappInstanceData {
   apiUrl?: string | null;
   apiKey?: string | null;
   isDefault: boolean;
+  leadFilterMode: LeadFilterMode;
+  ignoredLabelNames: string[];
+  leadKeywords: string[];
+  cachedLabels: WhatsappLabelItem[];
   createdAt: Date | string;
   updatedAt: Date | string;
+}
+
+export interface WhatsappIgnoredNumberItem {
+  id: string;
+  phoneKey: string;
+  rawPhone: string;
+  displayName?: string | null;
+  reason?: string | null;
+  source: string;
+  labelId?: string | null;
+  labelName?: string | null;
+  createdAt: string;
+}
+
+export interface EvolutionSyncedChatItem {
+  jid: string;
+  phone: string;
+  phoneKey: string;
+  displayName: string;
+  lastMessageText: string | null;
+  lastMessageAt: string | null;
+  archived: boolean;
+  labels: string[];
+  isAlreadyIgnored: boolean;
+  existingContactName?: string | null;
+}
+
+export interface WhatsappFilteringData {
+  leadFilterMode: LeadFilterMode;
+  ignoredLabelNames: string[];
+  leadKeywords: string[];
+  cachedLabels: WhatsappLabelItem[];
+  ignoredNumbers: WhatsappIgnoredNumberItem[];
 }
 
 export interface WhatsappMessageItem {

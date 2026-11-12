@@ -247,19 +247,43 @@ model Task {
 }
 
 model WhatsappInstance {
-  id          String         @id @default(cuid())
-  name        String
-  phoneNumber String?
-  status      WhatsappStatus @default(DISCONNECTED)
-  apiUrl      String?
-  apiKey      String?
-  isDefault   Boolean        @default(false)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id                String                  @id @default(cuid())
+  name              String
+  phoneNumber       String?
+  status            WhatsappStatus          @default(DISCONNECTED)
+  apiUrl            String?
+  apiKey            String?
+  isDefault         Boolean                 @default(false)
+  leadFilterMode    String                  @default("ALL_EXCEPT_IGNORED")
+  ignoredLabelNames Json?
+  leadKeywords      Json?                   @default("[]")
+  cachedLabels      Json?                   @default("[]")
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
-  messages WhatsappMessage[]
+  messages       WhatsappMessage[]
+  ignoredNumbers WhatsappIgnoredNumber[]
 
   @@map("whatsapp_instances")
+}
+
+model WhatsappIgnoredNumber {
+  id          String            @id @default(cuid())
+  instanceId  String?
+  instance    WhatsappInstance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+  phoneKey    String            @unique
+  rawPhone    String
+  displayName String?
+  reason      String?
+  source      String            @default("MANUAL")
+  labelId     String?
+  labelName   String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([instanceId])
+  @@index([source])
+  @@map("whatsapp_ignored_numbers")
 }
 
 model WhatsappMessage {

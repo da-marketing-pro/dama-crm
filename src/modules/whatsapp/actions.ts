@@ -3,16 +3,42 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { WhatsappMessageType, WhatsappStatus, StageType } from "@prisma/client";
+import { WhatsappMessageType, WhatsappStatus, StageType, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { ChatConversation, WhatsappMessageItem } from "./types";
+import {
+  ChatConversation,
+  WhatsappMessageItem,
+  WhatsappFilteringData,
+  EvolutionSyncedChatItem,
+  WhatsappLabelItem,
+} from "./types";
 import {
   normalizeEvolutionInstanceName,
   ensureInstanceAndGetQr,
   getEvolutionStatus,
   logoutEvolutionInstance,
   sendEvolutionMessage,
+  setEvolutionWebhook,
+  fetchEvolutionChats,
+  fetchEvolutionLabels,
 } from "@/lib/evolutionApi";
+import {
+  DEFAULT_IGNORED_LABEL_NAMES,
+  extractPhoneKeyAndRaw,
+  LeadFilterMode,
+  matchesLeadKeywords,
+  normalizeJsonStringArray,
+  normalizeLeadFilterMode,
+  parseBulkPhonesInput,
+  resolveEffectiveIgnoredLabels,
+} from "@/lib/whatsappFilterUtils";
+import {
+  checkWhatsappNumberIgnored,
+  loadIgnoredPhoneKeySets,
+  matchesIgnoredKeySets,
+  safeCleanupAutoCreatedLead,
+  upsertIgnoredWhatsappNumber,
+} from "@/lib/whatsappFiltering";
 
 function isConfiguredEvolutionGateway(
   apiUrl?: string | null,
@@ -401,34 +427,43 @@ export async function processIncomingWhatsappWebhook(payload: {
   mediaUrl?: string;
   fileName?: string;
   instanceId?: string;
+  isFromAd?: boolean;
 }) {
   try {
-    const rawIdentifier = (payload.phone || "").trim();
-    const digits = rawIdentifier.split("@")[0].split(":")[0].replace(/\D/g, "");
-    const isLidWithoutPhone = Boolean(payload.rawRemoteJid?.endsWith("@lid") && !digits);
-    const cleanPhone = isLidWithoutPhone
-      ? payload.rawRemoteJid!
-      : digits
-      ? `+${digits}`
-      : rawIdentifier.replace(/[^\d+]/g, "").trim();
-
-    if (!cleanPhone) {
+    const normalizedPhone = extractPhoneKeyAndRaw(payload.phone, payload.rawRemoteJid);
+    if (!normalizedPhone) {
       return { success: false, error: "Номер телефона не указан" };
     }
 
-    let instanceId = payload.instanceId;
-    if (!instanceId) {
-      const defaultInst = await getOrCreateDefaultInstance();
-      instanceId = defaultInst.id;
+    const cleanPhone = normalizedPhone.rawDisplay;
+    const digits = normalizedPhone.isLid ? "" : normalizedPhone.phoneKey;
+
+    const instance = payload.instanceId
+      ? await prisma.whatsappInstance.findUnique({ where: { id: payload.instanceId } })
+      : await getOrCreateDefaultInstance();
+
+    if (!instance) {
+      return { success: false, error: "Инстанс WhatsApp не найден" };
+    }
+    const instanceId = instance.id;
+
+    // 0. Проверяем стоп-лист (Вариант 1 + Вариант 2 + ярлыки WhatsApp Business из Варианта 4)
+    const ignoreCheck = await checkWhatsappNumberIgnored(payload.phone, payload.rawRemoteJid);
+    if (ignoreCheck.ignored) {
+      return {
+        success: true,
+        ignored: true,
+        reason: ignoreCheck.reason || "ignored_number",
+      };
     }
 
     // 1. Проверяем, существует ли контакт (с учетом любого форматирования номера в CRM)
-    const last10 = digits.length >= 10 ? digits.slice(-10) : cleanPhone.slice(-10);
+    const last10 = normalizedPhone.last10;
     let contact = await prisma.contact.findFirst({
       where: {
         OR: [
           { phone: cleanPhone },
-          ...(last10.length >= 7 ? [{ phone: { contains: last10 } }] : []),
+          ...(last10.length >= 10 ? [{ phone: { contains: last10 } }] : []),
         ],
       },
       include: {
@@ -443,9 +478,13 @@ export async function processIncomingWhatsappWebhook(payload: {
       const allContacts = await prisma.contact.findMany({
         select: { id: true, phone: true },
       });
-      const matched = allContacts.find(
-        (c) => c.phone.replace(/\D/g, "").slice(-10) === digits.slice(-10)
-      );
+      const matched = allContacts.find((c) => {
+        const parsed = extractPhoneKeyAndRaw(c.phone);
+        return (
+          parsed?.phoneKey === normalizedPhone.phoneKey ||
+          (parsed?.last10 && parsed.last10 === last10)
+        );
+      });
       if (matched) {
         contact = await prisma.contact.findUnique({
           where: { id: matched.id },
@@ -470,6 +509,20 @@ export async function processIncomingWhatsappWebhook(payload: {
     const assignedUserId = firstUser?.id;
 
     if (!contact) {
+      // Фильтр Варианта 4: незнакомые номера создают лид только с рекламы / ключевых слов
+      const filterMode = normalizeLeadFilterMode(instance.leadFilterMode);
+      if (filterMode === "ONLY_ADS_OR_KEYWORDS") {
+        const keywords = normalizeJsonStringArray(instance.leadKeywords);
+        const keywordMatched = matchesLeadKeywords(payload.textContent, keywords);
+        if (!payload.isFromAd && !keywordMatched) {
+          return {
+            success: true,
+            ignored: true,
+            reason: "lead_filter_no_ad_or_keyword",
+          };
+        }
+      }
+
       isNewContact = true;
       // Создаем новый контакт
       contact = await prisma.contact.create({
@@ -517,11 +570,12 @@ export async function processIncomingWhatsappWebhook(payload: {
 
         // Фиксируем запись в таймлайне
         if (assignedUserId) {
+          const adTag = payload.isFromAd ? " Источник: реклама Click-to-WhatsApp." : "";
           await prisma.contactNote.create({
             data: {
               contactId: contact.id,
               authorId: assignedUserId,
-              content: `Автоматически создан новый контакт и сделка «${newDeal.title}» в этапе «${firstStage.name}» из входящего сообщения WhatsApp.`,
+              content: `Автоматически создан новый контакт и сделка «${newDeal.title}» в этапе «${firstStage.name}» из входящего сообщения WhatsApp.${adTag}`,
             },
           });
         }
@@ -592,27 +646,37 @@ export async function getChatConversations(): Promise<ChatConversation[]> {
   const user = await getAuthUser();
   const isAdmin = user.role === "ADMIN";
 
-  const messages = await prisma.whatsappMessage.findMany({
-    orderBy: { timestamp: "desc" },
-    include: {
-      contact: {
-        include: {
-          deals: {
-            include: { stage: true },
-            orderBy: { createdAt: "desc" },
+  const [messages, ignoredSets] = await Promise.all([
+    prisma.whatsappMessage.findMany({
+      orderBy: { timestamp: "desc" },
+      include: {
+        contact: {
+          include: {
+            deals: {
+              include: { stage: true },
+              orderBy: { createdAt: "desc" },
+            },
           },
         },
+        deal: {
+          include: { stage: true },
+        },
       },
-      deal: {
-        include: { stage: true },
-      },
-    },
-  });
+    }),
+    loadIgnoredPhoneKeySets(),
+  ]);
 
   const convMap = new Map<string, ChatConversation>();
 
   for (const msg of messages) {
     if (!convMap.has(msg.remoteJid)) {
+      if (
+        matchesIgnoredKeySets(msg.remoteJid, ignoredSets) ||
+        matchesIgnoredKeySets(msg.contact?.phone, ignoredSets)
+      ) {
+        continue;
+      }
+
       const contact = msg.contact;
       if (!isAdmin && contact && contact.assignedToId && contact.assignedToId !== user.id) {
         continue;
@@ -824,4 +888,364 @@ export async function getPipelinesForChat() {
       type: s.type,
     })),
   }));
+}
+
+function parseCachedLabelsJson(val: Prisma.JsonValue | null | undefined): WhatsappLabelItem[] {
+  if (!Array.isArray(val)) return [];
+  const items: WhatsappLabelItem[] = [];
+  for (const item of val) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    if (obj.id != null && typeof obj.name === "string" && obj.name.trim()) {
+      items.push({
+        id: String(obj.id),
+        name: obj.name.trim(),
+        color: obj.color != null ? String(obj.color) : undefined,
+      });
+    }
+  }
+  return items;
+}
+
+// 11. Получить настройки фильтрации и список исключений (Вариант 1 + 2 + 4)
+export async function getWhatsappFilteringData(
+  instanceId: string
+): Promise<WhatsappFilteringData> {
+  const user = await getAuthUser();
+  if (user.role !== "ADMIN") {
+    return {
+      leadFilterMode: "ALL_EXCEPT_IGNORED",
+      ignoredLabelNames: [...DEFAULT_IGNORED_LABEL_NAMES],
+      leadKeywords: [],
+      cachedLabels: [],
+      ignoredNumbers: [],
+    };
+  }
+
+  const [instance, ignoredRows] = await Promise.all([
+    prisma.whatsappInstance.findUnique({ where: { id: instanceId } }),
+    prisma.whatsappIgnoredNumber.findMany({
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  return {
+    leadFilterMode: normalizeLeadFilterMode(instance?.leadFilterMode),
+    ignoredLabelNames: resolveEffectiveIgnoredLabels(instance?.ignoredLabelNames),
+    leadKeywords: normalizeJsonStringArray(instance?.leadKeywords),
+    cachedLabels: parseCachedLabelsJson(instance?.cachedLabels),
+    ignoredNumbers: ignoredRows.map((row) => ({
+      id: row.id,
+      phoneKey: row.phoneKey,
+      rawPhone: row.rawPhone,
+      displayName: row.displayName,
+      reason: row.reason,
+      source: row.source,
+      labelId: row.labelId,
+      labelName: row.labelName,
+      createdAt: row.createdAt.toISOString(),
+    })),
+  };
+}
+
+// 12. Сохранить правила фильтрации и стоп-ярлыки
+export async function updateWhatsappFilterSettings(
+  instanceId: string,
+  data: {
+    leadFilterMode: LeadFilterMode;
+    ignoredLabelNames: string[];
+    leadKeywords: string[];
+  }
+) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Настройки фильтрации доступны только Администратору" };
+    }
+
+    const cleanedLabels = Array.from(
+      new Set(data.ignoredLabelNames.map((s) => s.trim()).filter(Boolean))
+    );
+    const cleanedKeywords = Array.from(
+      new Set(data.leadKeywords.map((s) => s.trim().toLowerCase()).filter(Boolean))
+    );
+
+    await prisma.whatsappInstance.update({
+      where: { id: instanceId },
+      data: {
+        leadFilterMode: normalizeLeadFilterMode(data.leadFilterMode),
+        ignoredLabelNames: cleanedLabels as unknown as Prisma.InputJsonValue,
+        leadKeywords: cleanedKeywords as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/whatsapp");
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка сохранения правил фильтрации";
+    return { success: false, error: message };
+  }
+}
+
+// 13. Синхронизировать события вебхука на Evolution API (без переподключения QR)
+export async function syncEvolutionWebhookNow(instanceId: string, webhookUrl: string) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Доступно только Администратору" };
+    }
+
+    const instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });
+    if (!instance || !isConfiguredEvolutionGateway(instance.apiUrl, instance.apiKey)) {
+      return {
+        success: false,
+        error: "Сначала сохраните URL шлюза и API Ключ Evolution API",
+      };
+    }
+
+    const evoName = normalizeEvolutionInstanceName(instance.name, instance.id);
+    const res = await setEvolutionWebhook({
+      apiUrl: instance.apiUrl!,
+      apiKey: instance.apiKey!,
+      instanceName: evoName,
+      webhookUrl,
+    });
+
+    if (!res.ok) {
+      return { success: false, error: res.error || "Не удалось обновить Webhook на шлюзе" };
+    }
+
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка обновления вебхука";
+    return { success: false, error: message };
+  }
+}
+
+// 14. Добавить номера в стоп-лист (вручную списком или из выбранных чатов Evolution API)
+export async function addIgnoredWhatsappNumbers(params: {
+  instanceId: string;
+  rawText?: string;
+  reason?: string;
+  items?: Array<{
+    phone: string;
+    displayName?: string | null;
+    reason?: string | null;
+    source?: string;
+  }>;
+}) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Управление стоп-листом доступно только Администратору" };
+    }
+
+    let addedCount = 0;
+
+    if (params.rawText && params.rawText.trim()) {
+      const parsedItems = parseBulkPhonesInput(params.rawText);
+      for (const entry of parsedItems) {
+        const res = await upsertIgnoredWhatsappNumber({
+          instanceId: params.instanceId,
+          rawPhone: entry.rawDisplay,
+          reason: params.reason?.trim() || "Добавлено вручную в стоп-лист",
+          source: "MANUAL",
+        });
+        if (res) addedCount++;
+      }
+    }
+
+    if (Array.isArray(params.items)) {
+      for (const item of params.items) {
+        if (!item.phone) continue;
+        const res = await upsertIgnoredWhatsappNumber({
+          instanceId: params.instanceId,
+          rawPhone: item.phone,
+          displayName: item.displayName || null,
+          reason: item.reason || params.reason || "Рабочий чат / текущий клиент",
+          source: item.source || "CHAT_SYNC",
+        });
+        if (res) addedCount++;
+      }
+    }
+
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/whatsapp");
+    return { success: true, addedCount };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка добавления в стоп-лист";
+    return { success: false, error: message };
+  }
+}
+
+// 15. Удалить номер из стоп-листа
+export async function removeIgnoredWhatsappNumber(id: string) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Доступно только Администратору" };
+    }
+
+    await prisma.whatsappIgnoredNumber.delete({ where: { id } });
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/whatsapp");
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка удаления из стоп-листа";
+    return { success: false, error: message };
+  }
+}
+
+// 16. Загрузить текущие диалоги и ярлыки WhatsApp Business из Evolution API (Варианты 2 и 4)
+export async function fetchWhatsappChatsAndLabelsFromGateway(instanceId: string): Promise<{
+  success: boolean;
+  chats: EvolutionSyncedChatItem[];
+  labels: WhatsappLabelItem[];
+  chatsError?: string;
+  labelsError?: string;
+  error?: string;
+}> {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, chats: [], labels: [], error: "Доступно только Администратору" };
+    }
+
+    const instance = await prisma.whatsappInstance.findUnique({ where: { id: instanceId } });
+    if (!instance || !isConfiguredEvolutionGateway(instance.apiUrl, instance.apiKey)) {
+      return {
+        success: false,
+        chats: [],
+        labels: [],
+        error: "Шлюз Evolution API не настроен или не сохранен API Ключ",
+      };
+    }
+
+    const evoName = normalizeEvolutionInstanceName(instance.name, instance.id);
+
+    const [chatsRes, labelsRes, ignoredSets, contacts] = await Promise.all([
+      fetchEvolutionChats({
+        apiUrl: instance.apiUrl!,
+        apiKey: instance.apiKey!,
+        instanceName: evoName,
+      }),
+      fetchEvolutionLabels({
+        apiUrl: instance.apiUrl!,
+        apiKey: instance.apiKey!,
+        instanceName: evoName,
+      }),
+      loadIgnoredPhoneKeySets(),
+      prisma.contact.findMany({ select: { id: true, name: true, phone: true } }),
+    ]);
+
+    if (labelsRes.ok) {
+      await prisma.whatsappInstance.update({
+        where: { id: instance.id },
+        data: { cachedLabels: labelsRes.labels as unknown as Prisma.InputJsonValue },
+      });
+      revalidatePath("/settings/whatsapp");
+    }
+
+    const contactByKey = new Map<string, string>();
+    for (const c of contacts) {
+      const parsed = extractPhoneKeyAndRaw(c.phone);
+      if (!parsed) continue;
+      contactByKey.set(parsed.phoneKey, c.name);
+      if (parsed.last10) contactByKey.set(parsed.last10, c.name);
+    }
+
+    const chats: EvolutionSyncedChatItem[] = chatsRes.chats.map((chat) => {
+      const parsed = extractPhoneKeyAndRaw(chat.phone, chat.jid);
+      const isAlreadyIgnored =
+        matchesIgnoredKeySets(chat.phone, ignoredSets) ||
+        matchesIgnoredKeySets(chat.jid, ignoredSets);
+      const existingContactName = parsed
+        ? contactByKey.get(parsed.phoneKey) ||
+          (parsed.last10 ? contactByKey.get(parsed.last10) : undefined) ||
+          null
+        : null;
+
+      return {
+        jid: chat.jid,
+        phone: chat.phone,
+        phoneKey: parsed?.phoneKey || chat.jid,
+        displayName: chat.displayName,
+        lastMessageText: chat.lastMessageText,
+        lastMessageAt: chat.lastMessageAt,
+        archived: chat.archived,
+        labels: chat.labels,
+        isAlreadyIgnored,
+        existingContactName,
+      };
+    });
+
+    return {
+      success: chatsRes.ok || labelsRes.ok,
+      chats,
+      labels: labelsRes.labels,
+      chatsError: chatsRes.ok ? undefined : chatsRes.error,
+      labelsError: labelsRes.ok ? undefined : labelsRes.error,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка обращения к шлюзу Evolution API";
+    return { success: false, chats: [], labels: [], error: message };
+  }
+}
+
+// 17. Пометить диалог в 1 клик как «Рабочий чат (не лид)» (Вариант 1)
+export async function markConversationAsWorkChat(params: {
+  remoteJid: string;
+  contactId?: string | null;
+  displayName?: string | null;
+  reason?: string;
+  deleteAutoCreatedLead?: boolean;
+}) {
+  try {
+    const user = await getAuthUser();
+    const isAdmin = user.role === "ADMIN";
+
+    if (params.contactId && !isAdmin) {
+      const contact = await prisma.contact.findUnique({
+        where: { id: params.contactId },
+        select: { assignedToId: true },
+      });
+      if (contact?.assignedToId && contact.assignedToId !== user.id) {
+        return { success: false, error: "Нет прав на управление этим диалогом" };
+      }
+    }
+
+    const defaultInst = await getOrCreateDefaultInstance();
+
+    await upsertIgnoredWhatsappNumber({
+      instanceId: defaultInst.id,
+      rawPhone: params.remoteJid,
+      displayName: params.displayName || null,
+      reason: params.reason?.trim() || "Рабочий чат (отмечено в диалоге)",
+      source: "UI_BUTTON",
+    });
+
+    let cleanup = { deletedDealsCount: 0, deletedContact: false };
+    if (params.deleteAutoCreatedLead) {
+      cleanup = await safeCleanupAutoCreatedLead({
+        phoneOrJid: params.remoteJid,
+        contactId: params.contactId,
+      });
+    }
+
+    revalidatePath("/whatsapp");
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      deletedDealsCount: cleanup.deletedDealsCount,
+      deletedContact: cleanup.deletedContact,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка переноса в рабочие чаты";
+    return { success: false, error: message };
+  }
 }

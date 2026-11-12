@@ -28,15 +28,18 @@ import {
   disconnectWhatsappInstance,
   processIncomingWhatsappWebhook,
 } from "../actions";
-import { WhatsappInstanceData } from "../types";
+import { WhatsappFilteringData, WhatsappInstanceData } from "../types";
+import { WhatsappFilterSettings } from "./WhatsappFilterSettings";
 
 interface WhatsappSettingsViewProps {
   initialInstance: WhatsappInstanceData;
+  initialFilteringData: WhatsappFilteringData;
   isAdmin: boolean;
 }
 
 export function WhatsappSettingsView({
   initialInstance,
+  initialFilteringData,
   isAdmin,
 }: WhatsappSettingsViewProps) {
   const [instance, setInstance] = useState<WhatsappInstanceData>(initialInstance);
@@ -73,6 +76,8 @@ export function WhatsappSettingsView({
   const [isSimulating, setIsSimulating] = useState(false);
   const [simResult, setSimResult] = useState<{
     success: boolean;
+    ignored?: boolean;
+    reason?: string;
     contactId?: string;
     dealId?: string | null;
     messageId?: string;
@@ -664,12 +669,24 @@ export function WhatsappSettingsView({
             {simResult && (
               <div
                 className={`p-3.5 rounded-xl border text-xs space-y-2 animate-in fade-in slide-in-from-top-2 duration-200 ${
-                  simResult.success
+                  simResult.ignored
+                    ? "bg-amber-50 border-amber-200 text-amber-900"
+                    : simResult.success
                     ? "bg-emerald-50 border-emerald-200 text-emerald-900"
                     : "bg-rose-50 border-rose-200 text-rose-900"
                 }`}
               >
-                {simResult.success ? (
+                {simResult.ignored ? (
+                  <>
+                    <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                      <AlertCircle className="w-4 h-4 text-amber-600" />
+                      <span>Сообщение отфильтровано правилом CRM!</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      Контакт и сделка НЕ созданы. Причина: <strong>{simResult.reason}</strong>
+                    </p>
+                  </>
+                ) : simResult.success ? (
                   <>
                     <div className="flex items-center gap-1.5 font-bold text-emerald-800">
                       <CheckCircle2 className="w-4 h-4 text-emerald-600" />
@@ -709,6 +726,20 @@ export function WhatsappSettingsView({
           </div>
         </div>
       </div>
+
+      {/* Lead Filtering, Existing Chats & Business Labels (Options 1 + 2 + 4) */}
+      {isAdmin && (
+        <WhatsappFilterSettings
+          instanceId={instance.id}
+          initialData={initialFilteringData}
+          webhookUrl={webhookUrl}
+          isGatewayConfigured={Boolean(
+            formData.apiUrl?.trim() &&
+              !formData.apiUrl.includes("api.waha.dev") &&
+              (formData.apiKey?.trim() || instance.apiKey)
+          )}
+        />
+      )}
 
       {/* Real Evolution API QR Code Modal */}
       {showQrModal && (

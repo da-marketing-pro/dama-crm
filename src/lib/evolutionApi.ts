@@ -62,10 +62,13 @@ export function normalizeEvolutionInstanceName(name: string, fallbackId?: string
 
 /**
  * Форматирует JID / номер из Evolution API в читаемый номер телефона (+7...).
+ * Для технических @lid идентификаторов возвращает null, чтобы не путать LID с реальным номером.
  */
 export function formatJidToPhone(jid?: string | null): string | null {
   if (!jid) return null;
-  const digits = jid.split("@")[0].split(":")[0].replace(/[^\d]/g, "");
+  const trimmed = jid.trim();
+  if (trimmed.toLowerCase().endsWith("@lid")) return null;
+  const digits = trimmed.split("@")[0].split(":")[0].replace(/[^\d]/g, "");
   if (!digits) return null;
   return `+${digits}`;
 }
@@ -217,7 +220,13 @@ export async function setEvolutionWebhook(params: {
         url: webhookUrl,
         byEvents: false,
         base64: true,
-        events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+        events: [
+          "MESSAGES_UPSERT",
+          "CONNECTION_UPDATE",
+          "QRCODE_UPDATED",
+          "LABELS_ASSOCIATION",
+          "LABELS_EDIT",
+        ],
       },
     }),
   });
@@ -564,4 +573,270 @@ export async function fetchMediaBase64FromEvolution(params: {
   if (raw.startsWith("data:")) return raw;
   const mime = res.data.mimetype || params.fallbackMime;
   return `data:${mime};base64,${raw}`;
+}
+
+export interface EvolutionLabelInfo {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+export interface EvolutionContactInfo {
+  remoteJid: string;
+  remoteJidAlt?: string;
+  displayName: string;
+}
+
+export interface EvolutionChatInfo {
+  jid: string;
+  phone: string;
+  displayName: string;
+  lastMessageText: string | null;
+  lastMessageAt: string | null;
+  archived: boolean;
+  labels: string[];
+}
+
+function normalizeArrayPayload(payload: unknown, keys: string[]): Record<string, unknown>[] {
+  if (Array.isArray(payload)) {
+    return payload.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"));
+  }
+  if (payload && typeof payload === "object") {
+    const obj = payload as Record<string, unknown>;
+    for (const k of keys) {
+      if (Array.isArray(obj[k])) {
+        return (obj[k] as unknown[]).filter((item): item is Record<string, unknown> =>
+          Boolean(item && typeof item === "object")
+        );
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Получает список ярлыков WhatsApp Business (Списки / Labels) с шлюза Evolution API v2.
+ */
+export async function fetchEvolutionLabels(params: {
+  apiUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<{ ok: boolean; labels: EvolutionLabelInfo[]; error?: string }> {
+  const res = await evoFetch<unknown>(
+    params.apiUrl,
+    params.apiKey,
+    `/label/findLabels/${encodeURIComponent(params.instanceName)}`,
+    { method: "GET" }
+  );
+
+  if (!res.ok) {
+    return { ok: false, labels: [], error: res.error };
+  }
+
+  const rawList = normalizeArrayPayload(res.data, ["labels", "data", "records"]);
+  const labels: EvolutionLabelInfo[] = [];
+
+  for (const item of rawList) {
+    const id = item.id ?? item.labelId;
+    const name = item.name ?? item.labelName ?? item.title;
+    if (id != null && typeof name === "string" && name.trim()) {
+      labels.push({
+        id: String(id),
+        name: name.trim(),
+        color: item.color != null ? String(item.color) : undefined,
+      });
+    }
+  }
+
+  return { ok: true, labels };
+}
+
+/**
+ * Получает контакты с шлюза Evolution API v2 (помогает восстановить имена и сопоставить @lid -> телефон).
+ */
+export async function fetchEvolutionContacts(params: {
+  apiUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<{ ok: boolean; contacts: EvolutionContactInfo[]; error?: string }> {
+  const res = await evoFetch<unknown>(
+    params.apiUrl,
+    params.apiKey,
+    `/chat/findContacts/${encodeURIComponent(params.instanceName)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
+
+  if (!res.ok) {
+    return { ok: false, contacts: [], error: res.error };
+  }
+
+  const rawList = normalizeArrayPayload(res.data, ["contacts", "data", "records"]);
+  const contacts: EvolutionContactInfo[] = [];
+
+  for (const item of rawList) {
+    const remoteJid =
+      (typeof item.remoteJid === "string" && item.remoteJid) ||
+      (typeof item.id === "string" && item.id) ||
+      "";
+    if (!remoteJid) continue;
+
+    const remoteJidAlt =
+      typeof item.remoteJidAlt === "string" && item.remoteJidAlt ? item.remoteJidAlt : undefined;
+
+    const displayName =
+      (typeof item.name === "string" && item.name.trim()) ||
+      (typeof item.pushName === "string" && item.pushName.trim()) ||
+      (typeof item.verifiedName === "string" && item.verifiedName.trim()) ||
+      "";
+
+    contacts.push({ remoteJid, remoteJidAlt, displayName });
+  }
+
+  return { ok: true, contacts };
+}
+
+function extractChatLastMessagePreview(lastMessage: unknown): string | null {
+  if (!lastMessage || typeof lastMessage !== "object") return null;
+  const lm = lastMessage as Record<string, unknown>;
+  const msg = (lm.message && typeof lm.message === "object"
+    ? lm.message
+    : lm) as Record<string, unknown>;
+
+  const text =
+    (typeof msg.conversation === "string" && msg.conversation) ||
+    (typeof (msg.extendedTextMessage as Record<string, unknown> | undefined)?.text === "string" &&
+      String((msg.extendedTextMessage as Record<string, unknown>).text)) ||
+    (typeof (msg.imageMessage as Record<string, unknown> | undefined)?.caption === "string" &&
+      String((msg.imageMessage as Record<string, unknown>).caption)) ||
+    (msg.imageMessage ? "[Фото]" : null) ||
+    (msg.audioMessage || msg.pttMessage ? "[Голосовое сообщение]" : null) ||
+    (msg.documentMessage ? "[Документ]" : null) ||
+    (msg.videoMessage ? "[Видео]" : null) ||
+    (typeof lm.text === "string" ? lm.text : null);
+
+  if (!text) return null;
+  const trimmed = text.trim();
+  return trimmed.length > 90 ? `${trimmed.slice(0, 87)}...` : trimmed;
+}
+
+function extractTimestampIso(rawTs: unknown, fallbackIso: unknown): string | null {
+  if (typeof rawTs === "number" && Number.isFinite(rawTs) && rawTs > 0) {
+    const ms = rawTs < 10_000_000_000 ? rawTs * 1000 : rawTs;
+    return new Date(ms).toISOString();
+  }
+  if (typeof rawTs === "string" && /^\d+$/.test(rawTs.trim())) {
+    const num = Number(rawTs.trim());
+    const ms = num < 10_000_000_000 ? num * 1000 : num;
+    return new Date(ms).toISOString();
+  }
+  if (typeof fallbackIso === "string" && fallbackIso.trim()) {
+    const parsed = new Date(fallbackIso);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return null;
+}
+
+/**
+ * Загружает список текущих личных диалогов из Evolution API v2 (POST /chat/findChats)
+ * с обогащением имен из контактов WhatsApp. Группы и рассылки статусов отфильтровываются.
+ */
+export async function fetchEvolutionChats(params: {
+  apiUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<{ ok: boolean; chats: EvolutionChatInfo[]; error?: string }> {
+  const [chatsRes, contactsRes] = await Promise.all([
+    evoFetch<unknown>(
+      params.apiUrl,
+      params.apiKey,
+      `/chat/findChats/${encodeURIComponent(params.instanceName)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    ),
+    fetchEvolutionContacts(params).catch(() => ({ ok: false, contacts: [] as EvolutionContactInfo[] })),
+  ]);
+
+  if (!chatsRes.ok) {
+    return { ok: false, chats: [], error: chatsRes.error };
+  }
+
+  const contactByJid = new Map<string, EvolutionContactInfo>();
+  for (const c of contactsRes.contacts) {
+    contactByJid.set(c.remoteJid, c);
+    if (c.remoteJidAlt) contactByJid.set(c.remoteJidAlt, c);
+  }
+
+  const rawList = normalizeArrayPayload(chatsRes.data, ["chats", "data", "records"]);
+  const seenJids = new Set<string>();
+  const chats: EvolutionChatInfo[] = [];
+
+  for (const item of rawList) {
+    const rawJid =
+      (typeof item.remoteJid === "string" && item.remoteJid) ||
+      (typeof item.id === "string" && item.id) ||
+      "";
+    if (!rawJid) continue;
+    if (
+      item.isGroup === true ||
+      rawJid.endsWith("@g.us") ||
+      rawJid === "status@broadcast" ||
+      rawJid.endsWith("@newsletter")
+    ) {
+      continue;
+    }
+
+    const contactMatch = contactByJid.get(rawJid);
+    const resolvedJid =
+      rawJid.endsWith("@lid") && contactMatch?.remoteJidAlt && !contactMatch.remoteJidAlt.endsWith("@lid")
+        ? contactMatch.remoteJidAlt
+        : rawJid;
+
+    const phone = formatJidToPhone(resolvedJid) || resolvedJid;
+    if (!phone || seenJids.has(phone)) continue;
+    seenJids.add(phone);
+
+    const displayName =
+      (contactMatch?.displayName && contactMatch.displayName.trim()) ||
+      (typeof item.name === "string" && item.name.trim()) ||
+      (typeof item.pushName === "string" && item.pushName.trim()) ||
+      phone;
+
+    const lastMessage = item.lastMessage as Record<string, unknown> | undefined;
+    const lastMessageText = extractChatLastMessagePreview(lastMessage);
+    const lastMessageAt = extractTimestampIso(lastMessage?.messageTimestamp, item.updatedAt);
+
+    const rawLabels = Array.isArray(item.labels) ? item.labels : [];
+    const labels = rawLabels
+      .map((l) => {
+        if (typeof l === "string") return l.trim();
+        if (l && typeof l === "object" && typeof (l as Record<string, unknown>).name === "string") {
+          return String((l as Record<string, unknown>).name).trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+
+    chats.push({
+      jid: resolvedJid,
+      phone,
+      displayName,
+      lastMessageText,
+      lastMessageAt,
+      archived: Boolean(item.archived),
+      labels,
+    });
+  }
+
+  chats.sort((a, b) => {
+    const ta = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+    const tb = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+    return tb - ta;
+  });
+
+  return { ok: true, chats };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useId } from "react";
 import { ChatConversation, WhatsappMessageItem } from "../types";
 import { ChatList } from "./ChatList";
 import { ChatMessages } from "./ChatMessages";
@@ -9,10 +9,11 @@ import { ChatClientCard } from "./ChatClientCard";
 import {
   getChatConversations,
   getChatMessages,
+  markConversationAsWorkChat,
   sendWhatsappMessage,
 } from "../actions";
 import { WhatsappMessageType } from "@prisma/client";
-import { MessageCircle, Settings, QrCode, RefreshCw, Send, PlusCircle } from "lucide-react";
+import { MessageCircle, Settings, RefreshCw, Send, ShieldBan, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -47,6 +48,13 @@ export function WhatsappChatView({
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const workDialogRef = useRef<HTMLDialogElement | null>(null);
+  const workDialogTitleId = useId();
+  const [workDialogTarget, setWorkDialogTarget] = useState<ChatConversation | null>(null);
+  const [deleteAutoLeadChecked, setDeleteAutoLeadChecked] = useState(true);
+  const [isMarkingWorkChat, setIsMarkingWorkChat] = useState(false);
+  const [workChatError, setWorkChatError] = useState<string | null>(null);
 
   // Load messages whenever active conversation changes
   const loadMessages = useCallback(async (jid: string) => {
@@ -150,6 +158,75 @@ export function WhatsappChatView({
     setConversations(updated);
   };
 
+  useEffect(() => {
+    const dialog = workDialogRef.current;
+    if (!dialog || "closedBy" in HTMLDialogElement.prototype) return;
+
+    let pressedOutside = false;
+    const isOutside = (e: PointerEvent) => {
+      const r = dialog.getBoundingClientRect();
+      return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    };
+    const onDown = (e: PointerEvent) => {
+      pressedOutside = dialog.open && isOutside(e);
+    };
+    const onUp = (e: PointerEvent) => {
+      if (pressedOutside && dialog.open && isOutside(e)) dialog.close();
+      pressedOutside = false;
+    };
+    dialog.addEventListener("pointerdown", onDown);
+    dialog.addEventListener("pointerup", onUp);
+    return () => {
+      dialog.removeEventListener("pointerdown", onDown);
+      dialog.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  const handleOpenWorkChatDialog = () => {
+    if (!activeConversation) return;
+    const isAutoDeal = Boolean(
+      activeConversation.deal &&
+        activeConversation.deal.title.startsWith("Лид из WhatsApp:") &&
+        activeConversation.deal.totalBudget === 0
+    );
+    setWorkDialogTarget(activeConversation);
+    setDeleteAutoLeadChecked(isAutoDeal);
+    setWorkChatError(null);
+    workDialogRef.current?.showModal();
+  };
+
+  const handleConfirmWorkChat = async () => {
+    if (!workDialogTarget) return;
+    setIsMarkingWorkChat(true);
+    setWorkChatError(null);
+
+    const isAutoDealEligible = Boolean(
+      workDialogTarget.deal &&
+        workDialogTarget.deal.title.startsWith("Лид из WhatsApp:") &&
+        workDialogTarget.deal.totalBudget === 0
+    );
+
+    const res = await markConversationAsWorkChat({
+      remoteJid: workDialogTarget.remoteJid,
+      contactId: workDialogTarget.contactId,
+      displayName: workDialogTarget.contactName,
+      deleteAutoCreatedLead: isAutoDealEligible && deleteAutoLeadChecked,
+    });
+
+    setIsMarkingWorkChat(false);
+    if (!res.success) {
+      setWorkChatError(res.error || "Не удалось пометить диалог");
+      return;
+    }
+
+    workDialogRef.current?.close();
+    const updated = await getChatConversations();
+    setConversations(updated);
+    if (activeRemoteJid === workDialogTarget.remoteJid) {
+      setActiveRemoteJid(updated.length > 0 ? updated[0].remoteJid : null);
+    }
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-5.5rem)] -m-4 md:-m-6">
       {/* Top Bar */}
@@ -209,6 +286,7 @@ export function WhatsappChatView({
               messages={messages}
               onOpenContact={handleOpenContact}
               onOpenDeal={handleOpenDeal}
+              onMarkWorkChat={handleOpenWorkChatDialog}
             />
             <ChatInput onSendMessage={handleSendMessage} disabled={isLoadingMessages} />
           </div>
@@ -244,6 +322,90 @@ export function WhatsappChatView({
           />
         )}
       </div>
+
+      {/* Native <dialog> confirmation for "Рабочий чат (не лид)" */}
+      <dialog
+        ref={workDialogRef}
+        aria-labelledby={workDialogTitleId}
+        {...({ closedby: "any" } as Record<string, string>)}
+        className="rounded-2xl max-w-md w-[calc(100%-2rem)] p-0 shadow-2xl border border-slate-200 bg-white m-auto overflow-hidden"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <ShieldBan className="w-4 h-4 text-amber-600" />
+            <h2 id={workDialogTitleId} className="text-sm font-bold text-slate-900">
+              Перенести в рабочие чаты (не лид)?
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => workDialogRef.current?.close()}
+            aria-label="Закрыть диалог подтверждения"
+            className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3 text-xs text-slate-600">
+          <p>
+            Номер{" "}
+            <strong className="font-mono text-slate-900">
+              {workDialogTarget?.contactPhone || workDialogTarget?.remoteJid}
+            </strong>{" "}
+            ({workDialogTarget?.contactName}) будет добавлен в стоп-лист.
+          </p>
+          <p>
+            Этот чат скроется из CRM-раздела «Чаты WhatsApp», а новые сообщения от него больше не будут создавать лиды (вернуть номер можно в любой момент в Настройках WhatsApp).
+          </p>
+
+          {workDialogTarget?.deal &&
+          workDialogTarget.deal.title.startsWith("Лид из WhatsApp:") &&
+          workDialogTarget.deal.totalBudget === 0 ? (
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteAutoLeadChecked}
+                onChange={(e) => setDeleteAutoLeadChecked(e.target.checked)}
+                className="mt-0.5 accent-amber-600 rounded"
+              />
+              <span className="text-xs text-amber-950">
+                Удалить ошибочно созданный авто-лид{" "}
+                <strong className="font-semibold">«{workDialogTarget.deal.title}»</strong> из воронки
+              </span>
+            </label>
+          ) : (
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-500">
+              Существующие карточки контакта и сделок в CRM не будут удалены.
+            </div>
+          )}
+
+          {workChatError && (
+            <p role="alert" className="text-xs text-rose-600 font-medium">
+              {workChatError}
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            autoFocus
+            onClick={() => workDialogRef.current?.close()}
+            className="px-3.5 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirmWorkChat}
+            disabled={isMarkingWorkChat}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+          >
+            {isMarkingWorkChat ? "Сохраняем..." : "Да, это рабочий чат"}
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }

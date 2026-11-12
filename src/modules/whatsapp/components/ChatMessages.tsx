@@ -16,6 +16,7 @@ import {
   Phone,
   Building,
   User,
+  ShieldBan,
 } from "lucide-react";
 
 interface ChatMessagesProps {
@@ -23,6 +24,7 @@ interface ChatMessagesProps {
   messages: WhatsappMessageItem[];
   onOpenContact?: () => void;
   onOpenDeal?: () => void;
+  onMarkWorkChat?: () => void;
 }
 
 export function ChatMessages({
@@ -30,6 +32,7 @@ export function ChatMessages({
   messages,
   onOpenContact,
   onOpenDeal,
+  onMarkWorkChat,
 }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -99,6 +102,18 @@ export function ChatMessages({
               style={{ backgroundColor: conversation.deal.stageColor }}
             >
               <span>Сделка: {conversation.deal.title}</span>
+            </button>
+          )}
+
+          {onMarkWorkChat && (
+            <button
+              type="button"
+              onClick={onMarkWorkChat}
+              title="Пометить как рабочий чат (не лид) и добавить номер в стоп-лист"
+              className="px-2.5 py-1 text-amber-800 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <ShieldBan className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Рабочий чат (не лид)</span>
             </button>
           )}
         </div>
