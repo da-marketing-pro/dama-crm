@@ -62,6 +62,7 @@ export function WhatsappSettingsView({
   const [qrDiagnostic, setQrDiagnostic] = useState<string | null>(null);
   const [qrBase64, setQrBase64] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingPhoneInput, setPairingPhoneInput] = useState(initialInstance.phoneNumber || "");
   const [qrError, setQrError] = useState<string | null>(null);
   const [qrWebhookConfigured, setQrWebhookConfigured] = useState(false);
 
@@ -127,7 +128,7 @@ export function WhatsappSettingsView({
 
   // Автоматическая проверка каждые 2 сек пока открыто окно QR-кода (ждём скан ИЛИ асинхронный QRCODE_UPDATED)
   useEffect(() => {
-    if (!showQrModal || qrLoading || (!qrBase64 && !awaitingWebhook)) return;
+    if (!showQrModal || qrLoading || (!qrBase64 && !pairingCode && !awaitingWebhook)) return;
 
     let waitTicks = 0;
     const timer = setInterval(async () => {
@@ -144,6 +145,7 @@ export function WhatsappSettingsView({
         setShowQrModal(false);
         setAwaitingWebhook(false);
         setQrBase64(null);
+        setPairingCode(null);
         setStatusBanner(
           `WhatsApp успешно подключён${res.phoneNumber ? ` (${res.phoneNumber})` : ""}!`
         );
@@ -151,29 +153,29 @@ export function WhatsappSettingsView({
         return;
       }
 
-      if (res?.ok && !qrBase64 && res.qrBase64) {
-        setQrBase64(res.qrBase64);
+      if (res?.ok && !qrBase64 && !pairingCode && (res.qrBase64 || res.pairingCode)) {
+        setQrBase64(res.qrBase64 || null);
         setPairingCode(res.pairingCode || null);
         setAwaitingWebhook(false);
         setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
         return;
       }
 
-      if (!qrBase64 && awaitingWebhook) {
+      if (!qrBase64 && !pairingCode && awaitingWebhook) {
         waitTicks += 1;
         if (waitTicks >= 10) {
           setAwaitingWebhook(false);
           setQrError(
             `Evolution API не прислал QR-код${
               qrDiagnostic ? ` (${qrDiagnostic})` : ""
-            }. Нажмите «Обновить QR-код» ещё раз.`
+            }. Нажмите «Сбросить сессию и обновить QR» ниже.`
           );
         }
       }
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [showQrModal, qrLoading, qrBase64, awaitingWebhook, qrDiagnostic, instance.id]);
+  }, [showQrModal, qrLoading, qrBase64, pairingCode, awaitingWebhook, qrDiagnostic, instance.id]);
 
   const handleCopyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl);
@@ -212,7 +214,7 @@ export function WhatsappSettingsView({
     }
   };
 
-  const handleOpenAndFetchQr = async () => {
+  const handleOpenAndFetchQr = async (options?: { forceReset?: boolean; pairingPhone?: string }) => {
     if (!isAdmin) return;
     setShowQrModal(true);
     setQrLoading(true);
@@ -230,6 +232,8 @@ export function WhatsappSettingsView({
       apiUrl: formData.apiUrl,
       apiKey: formData.apiKey,
       webhookUrl: webhookUrl.startsWith("http") ? webhookUrl : undefined,
+      forceReset: options?.forceReset,
+      pairingPhone: options?.pairingPhone,
     });
 
     setQrLoading(false);
@@ -261,9 +265,9 @@ export function WhatsappSettingsView({
       return;
     }
 
-    if (res.qrBase64) {
+    if (res.qrBase64 || res.pairingCode) {
       setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
-      setQrBase64(res.qrBase64);
+      setQrBase64(res.qrBase64 || null);
       setPairingCode(res.pairingCode || null);
       return;
     }
@@ -275,7 +279,7 @@ export function WhatsappSettingsView({
       return;
     }
 
-    setQrError("Evolution API не вернул QR-код. Нажмите «Обновить QR-код».");
+    setQrError("Evolution API не вернул QR-код. Нажмите «Сбросить сессию и обновить QR».");
   };
 
   const handleDisconnect = async () => {
@@ -414,7 +418,7 @@ export function WhatsappSettingsView({
               ) : (
                 <button
                   type="button"
-                  onClick={handleOpenAndFetchQr}
+                  onClick={() => handleOpenAndFetchQr({ forceReset: true })}
                   disabled={!isAdmin || qrLoading}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
                 >
@@ -804,13 +808,13 @@ export function WhatsappSettingsView({
 
             {/* Real QR Code Container */}
             <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-2xl border border-slate-200 min-h-[250px]">
-              {qrLoading || (awaitingWebhook && !qrBase64) ? (
+              {qrLoading || (awaitingWebhook && !qrBase64 && !pairingCode) ? (
                 <div className="flex flex-col items-center gap-3 text-slate-500">
                   <RefreshCw className="w-8 h-8 animate-spin text-emerald-600" />
                   <span className="text-xs font-medium text-center">
-                    {awaitingWebhook && !qrBase64
+                    {awaitingWebhook && !qrBase64 && !pairingCode
                       ? "Ожидаем генерацию QR-кода от Evolution API..."
-                      : "Запрашиваем реальный QR-код у Evolution API..."}
+                      : "Пересоздаём чистую сессию и запрашиваем QR у Evolution API..."}
                   </span>
                 </div>
               ) : qrError ? (
@@ -823,25 +827,30 @@ export function WhatsappSettingsView({
                     {qrError}
                   </p>
                 </div>
-              ) : qrBase64 ? (
+              ) : qrBase64 || pairingCode ? (
                 <>
-                  <div className="w-56 h-56 bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-center shadow-sm">
-                    <img
-                      src={qrBase64}
-                      alt="QR-код для подключения WhatsApp"
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
+                  {qrBase64 && (
+                    <div className="w-56 h-56 bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-center shadow-sm">
+                      <img
+                        src={qrBase64}
+                        alt="QR-код для подключения WhatsApp"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
 
                   {pairingCode && (
-                    <div className="mt-2 px-3 py-1 bg-white rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
-                      Код привязки: {pairingCode}
+                    <div className="mt-2 px-4 py-2 bg-white rounded-xl border border-emerald-200 text-sm font-mono font-bold text-slate-900 tracking-widest text-center">
+                      <div className="text-[10px] font-sans font-semibold text-slate-500 tracking-normal mb-0.5">
+                        Код привязки по номеру телефона:
+                      </div>
+                      {pairingCode}
                     </div>
                   )}
 
                   <span className="text-[11px] text-emerald-700 mt-3 font-medium flex items-center gap-1.5">
                     <RefreshCw className="w-3 h-3 animate-spin" />
-                    Ожидаем сканирования (проверяем статус автоматически)...
+                    Ожидаем подтверждения на телефоне...
                   </span>
 
                   {qrWebhookConfigured && (
@@ -855,15 +864,41 @@ export function WhatsappSettingsView({
               )}
             </div>
 
+            {/* Alternative: Link with Phone Number (8-digit Pairing Code) */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <div className="text-[11px] font-semibold text-slate-700">
+                Альтернатива: привязать по номеру телефона (без камеры)
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  type="tel"
+                  value={pairingPhoneInput}
+                  onChange={(e) => setPairingPhoneInput(e.target.value)}
+                  placeholder="77011234567"
+                  className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleOpenAndFetchQr({ forceReset: true, pairingPhone: pairingPhoneInput })
+                  }
+                  disabled={qrLoading || pairingPhoneInput.replace(/\D/g, "").length < 10}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                >
+                  Код по номеру
+                </button>
+              </div>
+            </div>
+
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={handleOpenAndFetchQr}
+                onClick={() => handleOpenAndFetchQr({ forceReset: true })}
                 disabled={qrLoading}
                 className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${qrLoading ? "animate-spin" : ""}`} />
-                <span>{qrLoading ? "Загрузка..." : "Обновить QR-код"}</span>
+                <span>{qrLoading ? "Загрузка..." : "Сбросить сессию и обновить QR"}</span>
               </button>
 
               <button

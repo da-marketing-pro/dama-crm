@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
         const qr = await resolveQrDataUrl(
           (body.data || {}) as Record<string, unknown> | undefined
         );
-        if (instance && qr.qrBase64) {
+        if (instance && (qr.qrBase64 || qr.pairingCode)) {
           await prisma.whatsappInstance.update({
             where: { id: instance.id },
             data: {
@@ -167,7 +167,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           success: true,
           handled: "qrcode.updated",
-          stored: Boolean(instance && qr.qrBase64),
+          stored: Boolean(instance && (qr.qrBase64 || qr.pairingCode)),
         });
       }
 

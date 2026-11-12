@@ -129,6 +129,8 @@ export async function requestWhatsappQrCode(params: {
   apiUrl?: string;
   apiKey?: string;
   webhookUrl?: string;
+  forceReset?: boolean;
+  pairingPhone?: string;
 }) {
   try {
     const user = await getAuthUser();
@@ -181,6 +183,8 @@ export async function requestWhatsappQrCode(params: {
       apiKey: nextApiKey,
       instanceName,
       webhookUrl: params.webhookUrl,
+      forceReset: params.forceReset,
+      pairingPhone: params.pairingPhone,
     });
 
     if (!evoResult.success) {
@@ -193,13 +197,13 @@ export async function requestWhatsappQrCode(params: {
     let resolvedQrBase64 = evoResult.qrBase64 || null;
     let resolvedPairingCode = evoResult.pairingCode || null;
 
-    if (!evoResult.connected && !resolvedQrBase64) {
+    if (!evoResult.connected && !resolvedQrBase64 && !resolvedPairingCode) {
       const freshInstance = await prisma.whatsappInstance.findUnique({
         where: { id: instance.id },
         select: { lastQrCode: true, lastPairingCode: true, lastQrUpdatedAt: true },
       });
       if (
-        freshInstance?.lastQrCode &&
+        (freshInstance?.lastQrCode || freshInstance?.lastPairingCode) &&
         freshInstance.lastQrUpdatedAt &&
         freshInstance.lastQrUpdatedAt >= requestStartedAt
       ) {
@@ -231,7 +235,12 @@ export async function requestWhatsappQrCode(params: {
       connected: Boolean(evoResult.connected),
       qrBase64: resolvedQrBase64,
       pairingCode: resolvedPairingCode,
-      awaitingWebhook: Boolean(!evoResult.connected && !resolvedQrBase64 && evoResult.awaitingWebhook),
+      awaitingWebhook: Boolean(
+        !evoResult.connected &&
+          !resolvedQrBase64 &&
+          !resolvedPairingCode &&
+          evoResult.awaitingWebhook
+      ),
       diagnostic: evoResult.diagnostic,
       status: updated.status,
       phoneNumber: updated.phoneNumber,
@@ -311,7 +320,7 @@ export async function checkWhatsappConnectionState(instanceId: string) {
 
     const hasFreshQr = Boolean(
       evoStatus.state !== "open" &&
-        instance.lastQrCode &&
+        (instance.lastQrCode || instance.lastPairingCode) &&
         instance.lastQrUpdatedAt &&
         Date.now() - instance.lastQrUpdatedAt.getTime() < 90_000
     );

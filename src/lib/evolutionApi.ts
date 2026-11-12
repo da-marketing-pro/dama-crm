@@ -398,6 +398,7 @@ async function pollConnectForQr(params: {
   instanceName: string;
   attempts: number;
   delayMs?: number;
+  pairingDigits?: string;
 }): Promise<{
   ok: boolean;
   connected?: boolean;
@@ -406,14 +407,17 @@ async function pollConnectForQr(params: {
   lastPayload?: Record<string, unknown>;
   error?: string;
 }> {
-  const { apiUrl, apiKey, instanceName, attempts, delayMs = 900 } = params;
+  const { apiUrl, apiKey, instanceName, attempts, delayMs = 900, pairingDigits } = params;
   let lastPayload: Record<string, unknown> | undefined;
+  const connectPath = pairingDigits
+    ? `/instance/connect/${encodeURIComponent(instanceName)}?number=${encodeURIComponent(pairingDigits)}`
+    : `/instance/connect/${encodeURIComponent(instanceName)}`;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     const connectRes = await evoFetch<Record<string, unknown>>(
       apiUrl,
       apiKey,
-      `/instance/connect/${encodeURIComponent(instanceName)}`,
+      connectPath,
       { method: "GET" }
     );
 
@@ -433,7 +437,7 @@ async function pollConnectForQr(params: {
     }
 
     const qr = await resolveQrDataUrl(connectRes.data);
-    if (qr.qrBase64) {
+    if (qr.qrBase64 || qr.pairingCode) {
       return {
         ok: true,
         connected: false,
@@ -465,13 +469,15 @@ async function restartDisconnectedInstance(params: {
 }
 
 /**
- * Создает инстанс при необходимости, прописывает Webhook и возвращает реальный QR-код WhatsApp Web.
+ * Создает инстанс при необходимости, прописывает Webhook и возвращает реальный QR-код или Pairing Code WhatsApp Web.
  */
 export async function ensureInstanceAndGetQr(params: {
   apiUrl: string;
   apiKey: string;
   instanceName: string;
   webhookUrl?: string;
+  forceReset?: boolean;
+  pairingPhone?: string;
 }): Promise<{
   success: boolean;
   connected?: boolean;
@@ -484,7 +490,9 @@ export async function ensureInstanceAndGetQr(params: {
   webhookError?: string;
   error?: string;
 }> {
-  const { apiUrl, apiKey, instanceName, webhookUrl } = params;
+  const { apiUrl, apiKey, instanceName, webhookUrl, forceReset, pairingPhone } = params;
+  const pairingDigits = pairingPhone ? pairingPhone.replace(/\D/g, "") : "";
+  const effectivePairingDigits = pairingDigits.length >= 10 ? pairingDigits : undefined;
 
   const currentStatus = await getEvolutionStatus({ apiUrl, apiKey, instanceName });
   if (!currentStatus.ok) {
@@ -513,36 +521,62 @@ export async function ensureInstanceAndGetQr(params: {
     };
   }
 
-  let createPayload: Record<string, unknown> | undefined;
   const createInstanceWithQr = async () => {
-    const createRes = await evoFetch<Record<string, unknown>>(apiUrl, apiKey, "/instance/create", {
+    return evoFetch<Record<string, unknown>>(apiUrl, apiKey, "/instance/create", {
       method: "POST",
       body: JSON.stringify({
         instanceName,
         qrcode: true,
         integration: "WHATSAPP-BAILEYS",
+        ...(effectivePairingDigits ? { number: effectivePairingDigits } : {}),
       }),
     });
-    return createRes;
   };
 
-  if (currentStatus.state === "not_found") {
+  let createPayload: Record<string, unknown> | undefined;
+  let sessionRecreated = false;
+
+  if (forceReset && currentStatus.state !== "not_found") {
+    const delRes = await evoFetch(
+      apiUrl,
+      apiKey,
+      `/instance/delete/${encodeURIComponent(instanceName)}`,
+      { method: "DELETE" }
+    );
+    if (!delRes.ok && delRes.status !== 404) {
+      return { success: false, error: delRes.error || "Не удалось сбросить сессию инстанса" };
+    }
+    await new Promise((r) => setTimeout(r, 700));
+    const recreateRes = await createInstanceWithQr();
+    if (!recreateRes.ok) {
+      return { success: false, error: recreateRes.error || "Не удалось пересоздать инстанс" };
+    }
+    createPayload = recreateRes.data;
+    sessionRecreated = true;
+  } else if (currentStatus.state === "not_found") {
     const createRes = await createInstanceWithQr();
     if (!createRes.ok) {
       return { success: false, error: createRes.error || "Не удалось создать инстанс" };
     }
     createPayload = createRes.data;
+    sessionRecreated = true;
   }
 
   await syncWebhook();
 
-  // Пробуем достать QR сразу из ответа создания
+  // Пробуем достать QR/Pairing Code сразу из ответа создания
   let qr = await resolveQrDataUrl(createPayload);
   let lastPayload = createPayload;
 
-  // Если QR ещё не получен (или инстанс уже существовал), вызываем /instance/connect
-  if (!qr.qrBase64) {
-    const poll1 = await pollConnectForQr({ apiUrl, apiKey, instanceName, attempts: 3 });
+  // Если ещё не получено (или инстанс уже существовал), вызываем /instance/connect
+  if (!qr.qrBase64 && !(effectivePairingDigits && qr.pairingCode)) {
+    const poll1 = await pollConnectForQr({
+      apiUrl,
+      apiKey,
+      instanceName,
+      attempts: 3,
+      pairingDigits: effectivePairingDigits,
+    });
     if (!poll1.ok) {
       return { success: false, error: poll1.error };
     }
@@ -560,21 +594,30 @@ export async function ensureInstanceAndGetQr(params: {
   }
 
   // Если существующий отключенный инстанс завис и не отдает QR — перезапускаем или пересоздаем сессию
-  if (!qr.qrBase64 && currentStatus.state !== "not_found") {
+  if (!qr.qrBase64 && !(effectivePairingDigits && qr.pairingCode) && !sessionRecreated) {
     const restarted = await restartDisconnectedInstance({ apiUrl, apiKey, instanceName });
     if (restarted) {
       await new Promise((r) => setTimeout(r, 1200));
-      const pollRestart = await pollConnectForQr({ apiUrl, apiKey, instanceName, attempts: 2 });
+      const pollRestart = await pollConnectForQr({
+        apiUrl,
+        apiKey,
+        instanceName,
+        attempts: 2,
+        pairingDigits: effectivePairingDigits,
+      });
       if (pollRestart.ok && pollRestart.connected) {
         return { success: true, connected: true, qrBase64: null, webhookConfigured, webhookError };
       }
-      if (pollRestart.ok && pollRestart.qrBase64) {
-        qr = { qrBase64: pollRestart.qrBase64, pairingCode: pollRestart.pairingCode || null };
+      if (pollRestart.ok && (pollRestart.qrBase64 || pollRestart.pairingCode)) {
+        qr = {
+          qrBase64: pollRestart.qrBase64 || null,
+          pairingCode: pollRestart.pairingCode || null,
+        };
       }
       lastPayload = pollRestart.lastPayload || lastPayload;
     }
 
-    if (!qr.qrBase64) {
+    if (!qr.qrBase64 && !(effectivePairingDigits && qr.pairingCode)) {
       const delRes = await evoFetch(
         apiUrl,
         apiKey,
@@ -588,15 +631,19 @@ export async function ensureInstanceAndGetQr(params: {
           await syncWebhook();
           qr = await resolveQrDataUrl(recreateRes.data);
           lastPayload = recreateRes.data || lastPayload;
-          if (!qr.qrBase64) {
+          if (!qr.qrBase64 && !(effectivePairingDigits && qr.pairingCode)) {
             const pollRecreate = await pollConnectForQr({
               apiUrl,
               apiKey,
               instanceName,
               attempts: 2,
+              pairingDigits: effectivePairingDigits,
             });
-            if (pollRecreate.ok && pollRecreate.qrBase64) {
-              qr = { qrBase64: pollRecreate.qrBase64, pairingCode: pollRecreate.pairingCode || null };
+            if (pollRecreate.ok && (pollRecreate.qrBase64 || pollRecreate.pairingCode)) {
+              qr = {
+                qrBase64: pollRecreate.qrBase64 || null,
+                pairingCode: pollRecreate.pairingCode || null,
+              };
             }
             lastPayload = pollRecreate.lastPayload || lastPayload;
           }
@@ -605,12 +652,13 @@ export async function ensureInstanceAndGetQr(params: {
     }
   }
 
-  if (!qr.qrBase64) {
+  if (!qr.qrBase64 && !qr.pairingCode) {
     const diagnostic = summarizeEvoQrPayload(lastPayload, currentStatus.state);
     return {
       success: true,
       connected: false,
       qrBase64: null,
+      pairingCode: null,
       awaitingWebhook: true,
       diagnostic,
       webhookConfigured,
