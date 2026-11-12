@@ -9,10 +9,36 @@ export interface EvoFetchResult<T = unknown> {
   usedBaseUrl?: string;
 }
 
+const preferredBaseUrlCache = new Map<string, string>();
+
+function isKnownCoolifyEvolutionHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return (
+    lower === "wa.da-marketing.pro" ||
+    lower === "evolution-api" ||
+    lower === "vnyycpkg6op6tz0um8qdzuqf"
+  );
+}
+
+function isInternalDockerBaseUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.protocol === "http:" &&
+      (u.hostname === "evolution-api" ||
+        u.hostname === "vnyycpkg6op6tz0um8qdzuqf" ||
+        (!u.hostname.includes(".") && u.hostname !== "localhost"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Преобразует пользовательский URL в список кандидатов для запроса к Evolution API.
- * Если указан внутренний Docker-сервис Coolify без порта (например http://vnyycpkg6op6tz0um8qdzuqf),
- * сначала пробуем стандартный порт Evolution API :8080.
+ * В Docker-окружении Coolify (production) для локального шлюза автоматически добавляет
+ * внутренние Docker-адреса (`http://evolution-api:8080`, `http://vnyycpkg6op6tz0um8qdzuqf:8080`),
+ * чтобы обойти Hairpin NAT при обращении контейнера к публичному домену того же сервера.
  */
 export function resolveCandidateUrls(rawUrl: string): string[] {
   const trimmed = (rawUrl || "").trim();
@@ -27,18 +53,44 @@ export function resolveCandidateUrls(rawUrl: string): string[] {
   try {
     const parsed = new URL(withProtocol);
     const base = `${parsed.protocol}//${parsed.host}`;
+    const list: string[] = [];
 
-    // Однословный hostname внутренней Docker-сети без явного порта -> пробуем :8080 первым
-    if (
+    const cached = preferredBaseUrlCache.get(trimmed);
+    if (cached) list.push(cached);
+
+    const internalEnv = (process.env.EVOLUTION_INTERNAL_URL || "").trim().replace(/\/+$/, "");
+    const knownCoolify = isKnownCoolifyEvolutionHost(parsed.hostname);
+    const isDockerProd = process.env.NODE_ENV === "production";
+    const isSingleLabelHost =
       parsed.protocol === "http:" &&
-      !parsed.port &&
       !parsed.hostname.includes(".") &&
-      parsed.hostname !== "localhost"
-    ) {
-      return [`http://${parsed.hostname}:8080`, base];
+      parsed.hostname !== "localhost";
+
+    if (isDockerProd) {
+      if (internalEnv) list.push(internalEnv);
+      if (isSingleLabelHost && !parsed.port) {
+        list.push(`http://${parsed.hostname}:8080`);
+      }
+      if (knownCoolify) {
+        list.push("http://evolution-api:8080");
+        list.push("http://vnyycpkg6op6tz0um8qdzuqf:8080");
+      }
+      list.push(base);
+      if (knownCoolify) {
+        list.push("https://wa.da-marketing.pro");
+      }
+    } else {
+      if (isSingleLabelHost && !parsed.port) {
+        list.push(`http://${parsed.hostname}:8080`);
+      }
+      list.push(base);
+      if (knownCoolify) {
+        list.push("https://wa.da-marketing.pro");
+      }
+      if (internalEnv) list.push(internalEnv);
     }
 
-    return [base];
+    return Array.from(new Set(list));
   } catch {
     return [trimmed.replace(/\/+$/, "")];
   }
@@ -96,6 +148,21 @@ function extractEvoError(status: number, body: unknown): string {
   return `Ошибка Evolution API (HTTP ${status})`;
 }
 
+function formatFetchError(baseUrl: string, err: unknown): string {
+  if (!(err instanceof Error)) {
+    return `Ошибка сети при подключении к ${baseUrl}`;
+  }
+  const cause = (err as Error & { cause?: Record<string, unknown> }).cause;
+  const code = cause && typeof cause.code === "string" ? cause.code : "";
+  const causeMsg = cause && typeof cause.message === "string" ? cause.message : "";
+  const detail = [code, causeMsg && causeMsg !== err.message ? causeMsg : ""]
+    .filter(Boolean)
+    .join(": ");
+  return detail
+    ? `Ошибка сети при подключении к ${baseUrl}: ${err.message} (${detail})`
+    : `Ошибка сети при подключении к ${baseUrl}: ${err.message}`;
+}
+
 export async function evoFetch<T = unknown>(
   rawApiUrl: string,
   apiKey: string,
@@ -107,7 +174,7 @@ export async function evoFetch<T = unknown>(
     return { ok: false, status: 0, error: "Не указан URL шлюза Evolution API" };
   }
 
-  let lastNetworkError = "Не удалось подключиться к серверу Evolution API";
+  const attemptErrors: string[] = [];
 
   for (const baseUrl of candidates) {
     const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -122,8 +189,10 @@ export async function evoFetch<T = unknown>(
           ...(init?.headers || {}),
         },
         cache: "no-store",
-        signal: init?.signal || AbortSignal.timeout(12000),
+        signal: init?.signal || AbortSignal.timeout(8000),
       });
+
+      preferredBaseUrlCache.set(rawApiUrl.trim(), baseUrl);
 
       const text = await response.text();
       let parsed: unknown = undefined;
@@ -150,10 +219,8 @@ export async function evoFetch<T = unknown>(
         usedBaseUrl: baseUrl,
       };
     } catch (err: unknown) {
-      lastNetworkError =
-        err instanceof Error
-          ? `Ошибка сети при подключении к ${baseUrl}: ${err.message}`
-          : `Ошибка сети при подключении к ${baseUrl}`;
+      preferredBaseUrlCache.delete(rawApiUrl.trim());
+      attemptErrors.push(formatFetchError(baseUrl, err));
       // Пробуем следующий URL-кандидат только при сетевой ошибке
     }
   }
@@ -161,7 +228,7 @@ export async function evoFetch<T = unknown>(
   return {
     ok: false,
     status: 0,
-    error: `${lastNetworkError}. Рекомендуемый URL: https://wa.da-marketing.pro`,
+    error: attemptErrors.join(" | ") || "Не удалось подключиться к серверу Evolution API",
   };
 }
 
@@ -200,24 +267,40 @@ async function resolveQrDataUrl(payload: Record<string, unknown> | undefined): P
 
 /**
  * Настраивает Webhook на инстансе Evolution API v2.2 для получения входящих сообщений и статусов.
+ * Если связь с Evolution API идёт по внутренней сети Docker (`http://evolution-api:8080` и т.п.),
+ * вебхук автоматически направляется напрямую на внутренний адрес CRM (`http://dama-crm:3000/api/webhooks/whatsapp`),
+ * чтобы избежать блокировки Hairpin NAT на одном VPS.
  */
 export async function setEvolutionWebhook(params: {
   apiUrl: string;
   apiKey: string;
   instanceName: string;
   webhookUrl: string;
-}): Promise<{ ok: boolean; error?: string }> {
-  const { apiUrl, apiKey, instanceName, webhookUrl } = params;
+  preferredEvoBaseUrl?: string;
+}): Promise<{ ok: boolean; error?: string; effectiveWebhookUrl?: string }> {
+  const { apiUrl, apiKey, instanceName, webhookUrl, preferredEvoBaseUrl } = params;
   if (!webhookUrl || webhookUrl.startsWith("/")) {
     return { ok: false, error: "Укажите полный публичный URL вебхука (https://...)" };
   }
+
+  const probeBase =
+    preferredEvoBaseUrl || preferredBaseUrlCache.get(apiUrl.trim()) || "";
+  const internalWebhookOverride = (process.env.CRM_INTERNAL_WEBHOOK_URL || "").trim();
+  const isSameVpsWebhook = webhookUrl.includes("crm.da-marketing.pro");
+
+  const effectiveWebhookUrl =
+    internalWebhookOverride && isSameVpsWebhook
+      ? internalWebhookOverride
+      : isInternalDockerBaseUrl(probeBase) && isSameVpsWebhook
+      ? "http://dama-crm:3000/api/webhooks/whatsapp"
+      : webhookUrl;
 
   const res = await evoFetch(apiUrl, apiKey, `/webhook/set/${encodeURIComponent(instanceName)}`, {
     method: "POST",
     body: JSON.stringify({
       webhook: {
         enabled: true,
-        url: webhookUrl,
+        url: effectiveWebhookUrl,
         byEvents: false,
         base64: true,
         events: [
@@ -234,7 +317,7 @@ export async function setEvolutionWebhook(params: {
   if (!res.ok) {
     return { ok: false, error: res.error };
   }
-  return { ok: true };
+  return { ok: true, effectiveWebhookUrl };
 }
 
 /**
