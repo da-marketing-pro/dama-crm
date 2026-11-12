@@ -1,5 +1,9 @@
 import { WhatsappMessageType, WhatsappStatus, StageType } from "@prisma/client";
 import type { LeadFilterMode } from "@/lib/whatsappFilterUtils";
+import type { WhatsappQuickTemplate } from "@/lib/whatsappTemplates";
+import type { CalloLastWebhookDebug } from "@/lib/calloWebhook";
+
+export type { WhatsappQuickTemplate, CalloLastWebhookDebug };
 
 export interface WhatsappLabelItem {
   id: string;
@@ -30,6 +34,8 @@ export interface WhatsappInstanceData {
   ignoredLabelNames: string[];
   leadKeywords: string[];
   cachedLabels: WhatsappLabelItem[];
+  quickTemplates?: WhatsappQuickTemplate[];
+  lastCalloWebhook?: CalloLastWebhookDebug | null;
   createdAt: Date | string;
   updatedAt: Date | string;
 }

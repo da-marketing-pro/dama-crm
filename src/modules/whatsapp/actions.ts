@@ -39,6 +39,11 @@ import {
   safeCleanupAutoCreatedLead,
   upsertIgnoredWhatsappNumber,
 } from "@/lib/whatsappFiltering";
+import {
+  normalizeQuickTemplates,
+  WhatsappQuickTemplate,
+} from "@/lib/whatsappTemplates";
+import { processCalloLeadWebhook } from "@/lib/calloWebhook";
 
 function isConfiguredEvolutionGateway(
   apiUrl?: string | null,
@@ -427,11 +432,15 @@ export async function sendWhatsappMessage(data: {
       }
     }
 
-    // Сохраняем исходящее сообщение
+    // Сохраняем исходящее сообщение (нормализуем номер без + для склейки с входящим вебхуком)
+    const storedRemoteJid = data.remoteJid.includes("@")
+      ? data.remoteJid
+      : data.remoteJid.replace(/[^\d]/g, "") || data.remoteJid;
+
     const message = await prisma.whatsappMessage.create({
       data: {
         instanceId: instance.id,
-        remoteJid: data.remoteJid,
+        remoteJid: storedRemoteJid,
         contactId: data.contactId || null,
         dealId: data.dealId || null,
         fromMe: true,
@@ -1530,6 +1539,87 @@ export async function importWhatsappLeadChatsToCrm(params: {
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка импорта лидов из WhatsApp";
+    return { success: false, error: message };
+  }
+}
+
+// 19. Получить быстрые шаблоны сообщений WhatsApp
+export async function getWhatsappQuickTemplates(): Promise<WhatsappQuickTemplate[]> {
+  await getAuthUser();
+  const instance = await getOrCreateDefaultInstance();
+  return normalizeQuickTemplates(instance.quickTemplates);
+}
+
+// 20. Обновить быстрые шаблоны сообщений WhatsApp (только ADMIN)
+export async function updateWhatsappQuickTemplates(
+  instanceId: string,
+  templates: WhatsappQuickTemplate[]
+) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Только администратор может изменять шаблоны" };
+    }
+
+    const cleaned = normalizeQuickTemplates(templates);
+    await prisma.whatsappInstance.update({
+      where: { id: instanceId },
+      data: {
+        quickTemplates: cleaned as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/whatsapp");
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    return { success: true, templates: cleaned };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка сохранения шаблонов";
+    return { success: false, error: message };
+  }
+}
+
+// 21. Тестовый запуск вебхука Callo.com из настроек (только ADMIN)
+export async function simulateCalloWebhookTest(params: {
+  instanceId: string;
+  phone: string;
+  name?: string;
+  buttonNum?: string;
+}) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Доступно только администратору" };
+    }
+
+    const res = await processCalloLeadWebhook(
+      {
+        ct_phone: params.phone,
+        ct_button_num: params.buttonNum || "1",
+        ct_campaign_id: "test-campaign",
+        ct_call_id: `test-${Date.now()}`,
+        ct_status: "compl_finished",
+        ct_duration: "18.5",
+        ...(params.name?.trim() ? { ct_name: params.name.trim() } : {}),
+      },
+      { instanceId: params.instanceId, isTest: true }
+    );
+
+    if (!res.success) {
+      return { success: false, error: res.error };
+    }
+
+    return {
+      success: true,
+      contactId: res.contactId,
+      dealId: res.dealId,
+      phone: res.phone,
+      pipelineName: res.pipelineName,
+      stageName: res.stageName,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка теста вебхука Callo";
     return { success: false, error: message };
   }
 }

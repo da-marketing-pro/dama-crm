@@ -5,11 +5,16 @@ import { WhatsappMessageItem } from "../types";
 import {
   getContactWhatsappMessages,
   getDealWhatsappMessages,
+  getWhatsappQuickTemplates,
   sendWhatsappMessage,
 } from "../actions";
 import { WhatsappMessageType } from "@prisma/client";
 import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 import { ChatInput } from "./ChatInput";
+import {
+  DEFAULT_WHATSAPP_QUICK_TEMPLATES,
+  WhatsappQuickTemplate,
+} from "@/lib/whatsappTemplates";
 import {
   MessageCircle,
   Clock,
@@ -19,6 +24,8 @@ import {
   Maximize2,
   X,
   RefreshCw,
+  Sparkles,
+  Send,
 } from "lucide-react";
 
 interface EmbeddedWhatsappChatProps {
@@ -37,9 +44,22 @@ export function EmbeddedWhatsappChat({
   const [messages, setMessages] = useState<WhatsappMessageItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<WhatsappQuickTemplate[]>(
+    DEFAULT_WHATSAPP_QUICK_TEMPLATES
+  );
+  const [draftText, setDraftText] = useState<string>("");
+  const [isSendingTemplate, setIsSendingTemplate] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const cleanPhone = contactPhone.replace(/[^\d+]/g, "").trim();
+
+  useEffect(() => {
+    getWhatsappQuickTemplates()
+      .then((res) => {
+        if (res && res.length > 0) setTemplates(res);
+      })
+      .catch(() => {});
+  }, []);
 
   const loadMessages = useCallback(async () => {
     setIsLoading(true);
@@ -137,12 +157,51 @@ export function EmbeddedWhatsappChat({
         }}
       >
         {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-1.5 text-center p-4">
-            <Clock className="w-6 h-6 text-slate-300" />
-            <p className="text-xs font-medium">Нет сообщений WhatsApp</p>
-            <p className="text-[11px] text-slate-400">
-              Напишите первое сообщение или запишите голосовое клиенту прямо сейчас
-            </p>
+          <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-3 text-center p-4">
+            <div className="space-y-1">
+              <Clock className="w-6 h-6 text-slate-300 mx-auto" />
+              <p className="text-xs font-medium text-slate-600">Нет сообщений WhatsApp</p>
+              <p className="text-[11px] text-slate-400">
+                Напишите первое сообщение вручную или отправьте шаблон в 1 клик
+              </p>
+            </div>
+
+            {templates[0] && (
+              <div className="w-full max-w-md bg-white border border-emerald-200 rounded-2xl p-3.5 text-left shadow-xs space-y-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{templates[0].title}</span>
+                </div>
+                <p className="text-[11px] text-slate-600 whitespace-pre-wrap line-clamp-4 leading-relaxed bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                  {templates[0].text}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDraftText(templates[0].text)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-semibold cursor-pointer"
+                  >
+                    Подставить в поле
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSendingTemplate || !cleanPhone}
+                    onClick={async () => {
+                      setIsSendingTemplate(true);
+                      await handleSendMessage({
+                        messageType: WhatsappMessageType.TEXT,
+                        textContent: templates[0].text,
+                      });
+                      setIsSendingTemplate(false);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="w-3 h-3" />
+                    <span>{isSendingTemplate ? "Отправка..." : "Отправить сразу"}</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           messages.map((msg) => {
@@ -250,7 +309,13 @@ export function EmbeddedWhatsappChat({
       </div>
 
       {/* Input */}
-      <ChatInput onSendMessage={handleSendMessage} disabled={isLoading} />
+      <ChatInput
+        onSendMessage={handleSendMessage}
+        disabled={isLoading || isSendingTemplate}
+        templates={templates}
+        draftText={draftText}
+        onDraftConsumed={() => setDraftText("")}
+      />
 
       {/* Lightbox Modal */}
       {selectedImage && (

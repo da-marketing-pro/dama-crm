@@ -18,6 +18,10 @@ import {
   Mic,
   ArrowRight,
   Wifi,
+  PhoneCall,
+  Sparkles,
+  Save,
+  RotateCcw,
 } from "lucide-react";
 import Link from "next/link";
 import { WhatsappStatus, WhatsappMessageType } from "@prisma/client";
@@ -27,9 +31,20 @@ import {
   checkWhatsappConnectionState,
   disconnectWhatsappInstance,
   processIncomingWhatsappWebhook,
+  updateWhatsappQuickTemplates,
+  simulateCalloWebhookTest,
 } from "../actions";
-import { WhatsappFilteringData, WhatsappInstanceData } from "../types";
+import {
+  WhatsappFilteringData,
+  WhatsappInstanceData,
+  WhatsappQuickTemplate,
+} from "../types";
 import { WhatsappFilterSettings } from "./WhatsappFilterSettings";
+import {
+  AUTODIALER_WELCOME_TEMPLATE_ID,
+  DEFAULT_AUTODIALER_WELCOME_TEXT,
+  DEFAULT_WHATSAPP_QUICK_TEMPLATES,
+} from "@/lib/whatsappTemplates";
 
 interface PipelineOption {
   id: string;
@@ -46,6 +61,7 @@ interface WhatsappSettingsViewProps {
   initialInstance: WhatsappInstanceData;
   initialFilteringData: WhatsappFilteringData;
   pipelines: PipelineOption[];
+  calloWebhookToken: string;
   isAdmin: boolean;
 }
 
@@ -53,6 +69,7 @@ export function WhatsappSettingsView({
   initialInstance,
   initialFilteringData,
   pipelines,
+  calloWebhookToken,
   isAdmin,
 }: WhatsappSettingsViewProps) {
   const [instance, setInstance] = useState<WhatsappInstanceData>(initialInstance);
@@ -79,8 +96,38 @@ export function WhatsappSettingsView({
   const [qrError, setQrError] = useState<string | null>(null);
   const [qrWebhookConfigured, setQrWebhookConfigured] = useState(false);
 
-  // Webhook copy
+  // Webhook copy & Callo autodialer state
   const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [copiedCalloWebhook, setCopiedCalloWebhook] = useState(false);
+  const [clientOrigin, setClientOrigin] = useState("https://crm.da-marketing.pro");
+  const [calloTestPhone, setCalloTestPhone] = useState("+77015554433");
+  const [isTestingCallo, setIsTestingCallo] = useState(false);
+  const [calloTestResult, setCalloTestResult] = useState<{
+    success: boolean;
+    phone?: string;
+    pipelineName?: string;
+    stageName?: string;
+    error?: string;
+  } | null>(null);
+
+  const initialTemplates =
+    initialInstance.quickTemplates && initialInstance.quickTemplates.length > 0
+      ? initialInstance.quickTemplates
+      : DEFAULT_WHATSAPP_QUICK_TEMPLATES;
+  const [quickTemplateText, setQuickTemplateText] = useState(initialTemplates[0].text);
+  const [quickTemplateTitle, setQuickTemplateTitle] = useState(initialTemplates[0].title);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [templateSaveFeedback, setTemplateSaveFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setClientOrigin(window.location.origin);
+    }
+  }, []);
+
+  const calloWebhookUrl = calloWebhookToken
+    ? `${clientOrigin}/api/webhooks/callo/${calloWebhookToken}`
+    : `${clientOrigin}/api/webhooks/callo`;
 
   // Simulator State
   const [simPhone, setSimPhone] = useState("+7 (777) 123-45-67");
@@ -796,6 +843,212 @@ export function WhatsappSettingsView({
               (formData.apiKey?.trim() || instance.apiKey)
           )}
         />
+      )}
+
+      {/* Callo.com Autodialer Webhook & Semi-auto WhatsApp Template */}
+      {isAdmin && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-orange-100 text-orange-700 flex items-center justify-center shrink-0">
+                <PhoneCall className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Автообзвон Callo.com (вебхук по нажатию «1»)
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Лиды с обзвона сразу попадают в Контакты и воронку «Холодный автообзвон» → «Неразобранные»
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Left: Webhook URL + Callo Setup + Last Signal + Test */}
+            <div className="space-y-3.5">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                <div className="text-xs font-bold text-slate-800">
+                  URL вебхука для вставки в Callo.com
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 truncate select-all">
+                    {calloWebhookUrl}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(calloWebhookUrl);
+                      setCopiedCalloWebhook(true);
+                      setTimeout(() => setCopiedCalloWebhook(false), 2000);
+                    }}
+                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    {copiedCalloWebhook ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Скопировано</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Копировать</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <ul className="text-[11px] text-slate-600 space-y-1 list-disc list-inside leading-relaxed">
+                  <li>
+                    В Callo откройте сценарий <strong>«Нажатие цифры 1» → «Отправить вебхук»</strong>.
+                  </li>
+                  <li>
+                    Метод: подойдет и <strong>GET</strong>, и <strong>POST</strong> (CRM принимает оба варианта и все параметры <code>ct_phone</code>, <code>ct_call_id</code>, <code>ct_button_num</code>).
+                  </li>
+                  <li>
+                    Рекомендуем отметить галочку <strong>«Отправлять вебхук сразу при срабатывании, не дожидаясь окончания звонка»</strong> — лид придет мгновенно.
+                  </li>
+                </ul>
+              </div>
+
+              {/* Last Callo Webhook Telemetry */}
+              {instance.lastCalloWebhook && (
+                <div className="p-3 rounded-xl bg-orange-50/70 border border-orange-200 text-xs space-y-1">
+                  <div className="font-bold text-orange-900">
+                    Последний сигнал от Callo.com: {instance.lastCalloWebhook.phone}
+                  </div>
+                  <div className="text-[11px] text-orange-800">
+                    {instance.lastCalloWebhook.note || instance.lastCalloWebhook.outcome} •{" "}
+                    {new Date(instance.lastCalloWebhook.receivedAt).toLocaleString("ru-RU")}
+                  </div>
+                </div>
+              )}
+
+              {/* 1-click Callo Test */}
+              <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                <div className="text-xs font-bold text-slate-800">
+                  Проверить попадание лида в «Холодный автообзвон»
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={calloTestPhone}
+                    onChange={(e) => setCalloTestPhone(e.target.value)}
+                    placeholder="+77015554433"
+                    className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={isTestingCallo}
+                    onClick={async () => {
+                      setIsTestingCallo(true);
+                      setCalloTestResult(null);
+                      const res = await simulateCalloWebhookTest({
+                        instanceId: instance.id,
+                        phone: calloTestPhone,
+                        buttonNum: "1",
+                      });
+                      setIsTestingCallo(false);
+                      setCalloTestResult(res);
+                    }}
+                    className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-semibold shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    {isTestingCallo ? "Создаём..." : "Тест лида"}
+                  </button>
+                </div>
+                {calloTestResult && (
+                  <p
+                    className={`text-[11px] font-medium ${
+                      calloTestResult.success ? "text-emerald-700" : "text-rose-700"
+                    }`}
+                  >
+                    {calloTestResult.success
+                      ? `Готово! Контакт ${calloTestResult.phone} добавлен в «${calloTestResult.pipelineName}» → «${calloTestResult.stageName}».`
+                      : `Ошибка: ${calloTestResult.error}`}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Right: Editable Semi-auto WhatsApp First Message Template */}
+            <div className="p-4 rounded-xl bg-emerald-50/40 border border-emerald-200 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>Шаблон 1-го сообщения в WhatsApp (полуавтомат)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickTemplateTitle("Отклик автообзвон (разбор)");
+                    setQuickTemplateText(DEFAULT_AUTODIALER_WELCOME_TEXT);
+                    setTemplateSaveFeedback(null);
+                  }}
+                  className="text-[11px] font-medium text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Сбросить</span>
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Название шаблона
+                </label>
+                <input
+                  type="text"
+                  value={quickTemplateTitle}
+                  onChange={(e) => setQuickTemplateTitle(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Текст приветствия (доступен в карточке сделки и чатах WhatsApp)
+                </label>
+                <textarea
+                  rows={8}
+                  value={quickTemplateText}
+                  onChange={(e) => setQuickTemplateText(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 leading-relaxed"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-emerald-700 font-medium">
+                  {templateSaveFeedback || ""}
+                </span>
+                <button
+                  type="button"
+                  disabled={isSavingTemplate || !quickTemplateText.trim()}
+                  onClick={async () => {
+                    setIsSavingTemplate(true);
+                    setTemplateSaveFeedback(null);
+                    const updated: WhatsappQuickTemplate[] = [
+                      {
+                        id: AUTODIALER_WELCOME_TEMPLATE_ID,
+                        title: quickTemplateTitle.trim() || "Отклик автообзвон (разбор)",
+                        text: quickTemplateText.trim(),
+                      },
+                    ];
+                    const res = await updateWhatsappQuickTemplates(instance.id, updated);
+                    setIsSavingTemplate(false);
+                    setTemplateSaveFeedback(
+                      res.success
+                        ? "Шаблон сохранён"
+                        : res.error || "Ошибка сохранения"
+                    );
+                  }}
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingTemplate ? "Сохраняем..." : "Сохранить шаблон"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Real Evolution API QR Code Modal */}

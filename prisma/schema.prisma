@@ -258,6 +258,8 @@ model WhatsappInstance {
   ignoredLabelNames Json?
   leadKeywords      Json?                   @default("[]")
   cachedLabels      Json?                   @default("[]")
+  quickTemplates    Json?                   @default("[]")
+  lastCalloWebhook  Json?
   lastQrCode        String?
   lastPairingCode   String?
   lastQrUpdatedAt   DateTime?

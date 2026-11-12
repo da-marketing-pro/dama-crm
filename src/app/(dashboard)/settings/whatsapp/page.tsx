@@ -14,6 +14,8 @@ import {
   normalizeLeadFilterMode,
   resolveEffectiveIgnoredLabels,
 } from "@/lib/whatsappFilterUtils";
+import { CalloLastWebhookDebug, generateCalloWebhookToken } from "@/lib/calloWebhook";
+import { normalizeQuickTemplates } from "@/lib/whatsappTemplates";
 
 export default async function WhatsappSettingsPage() {
   const session = await getServerSession(authOptions);
@@ -40,6 +42,8 @@ export default async function WhatsappSettingsPage() {
         [],
       ];
 
+  const calloWebhookToken = isAdmin ? generateCalloWebhookToken(instance.id) : "";
+
   const formattedInstance: WhatsappInstanceData = {
     id: instance.id,
     name: instance.name,
@@ -52,6 +56,9 @@ export default async function WhatsappSettingsPage() {
     ignoredLabelNames: resolveEffectiveIgnoredLabels(instance.ignoredLabelNames),
     leadKeywords: normalizeJsonStringArray(instance.leadKeywords),
     cachedLabels: filteringData.cachedLabels,
+    quickTemplates: normalizeQuickTemplates(instance.quickTemplates),
+    lastCalloWebhook:
+      (instance.lastCalloWebhook as CalloLastWebhookDebug | null | undefined) || null,
     createdAt: instance.createdAt.toISOString(),
     updatedAt: instance.updatedAt.toISOString(),
   };
@@ -61,6 +68,7 @@ export default async function WhatsappSettingsPage() {
       initialInstance={formattedInstance}
       initialFilteringData={filteringData}
       pipelines={pipelines}
+      calloWebhookToken={calloWebhookToken}
       isAdmin={isAdmin}
     />
   );

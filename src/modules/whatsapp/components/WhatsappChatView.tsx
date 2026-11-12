@@ -9,10 +9,15 @@ import { ChatClientCard } from "./ChatClientCard";
 import {
   getChatConversations,
   getChatMessages,
+  getWhatsappQuickTemplates,
   markConversationAsWorkChat,
   sendWhatsappMessage,
 } from "../actions";
 import { WhatsappMessageType } from "@prisma/client";
+import {
+  DEFAULT_WHATSAPP_QUICK_TEMPLATES,
+  WhatsappQuickTemplate,
+} from "@/lib/whatsappTemplates";
 import { MessageCircle, Settings, RefreshCw, Send, ShieldBan, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -55,6 +60,17 @@ export function WhatsappChatView({
   const [deleteAutoLeadChecked, setDeleteAutoLeadChecked] = useState(true);
   const [isMarkingWorkChat, setIsMarkingWorkChat] = useState(false);
   const [workChatError, setWorkChatError] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<WhatsappQuickTemplate[]>(
+    DEFAULT_WHATSAPP_QUICK_TEMPLATES
+  );
+
+  useEffect(() => {
+    getWhatsappQuickTemplates()
+      .then((res) => {
+        if (res && res.length > 0) setTemplates(res);
+      })
+      .catch(() => {});
+  }, []);
 
   // Load messages whenever active conversation changes
   const loadMessages = useCallback(async (jid: string) => {
@@ -288,7 +304,11 @@ export function WhatsappChatView({
               onOpenDeal={handleOpenDeal}
               onMarkWorkChat={handleOpenWorkChatDialog}
             />
-            <ChatInput onSendMessage={handleSendMessage} disabled={isLoadingMessages} />
+            <ChatInput
+              onSendMessage={handleSendMessage}
+              disabled={isLoadingMessages}
+              templates={templates}
+            />
           </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
