@@ -20,7 +20,7 @@ export default async function WhatsappSettingsPage() {
     phoneNumber: instance.phoneNumber,
     status: instance.status,
     apiUrl: instance.apiUrl,
-    apiKey: instance.apiKey,
+    apiKey: isAdmin ? instance.apiKey : null,
     isDefault: instance.isDefault,
     createdAt: instance.createdAt.toISOString(),
     updatedAt: instance.updatedAt.toISOString(),

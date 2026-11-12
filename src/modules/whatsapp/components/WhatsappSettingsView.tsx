@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   MessageCircle,
   QrCode,
@@ -12,16 +12,22 @@ import {
   Send,
   RefreshCw,
   Power,
-  ExternalLink,
   Shield,
   FileText,
   Image as ImageIcon,
   Mic,
   ArrowRight,
+  Wifi,
 } from "lucide-react";
 import Link from "next/link";
 import { WhatsappStatus, WhatsappMessageType } from "@prisma/client";
-import { updateInstanceSettings, processIncomingWhatsappWebhook } from "../actions";
+import {
+  updateInstanceSettings,
+  requestWhatsappQrCode,
+  checkWhatsappConnectionState,
+  disconnectWhatsappInstance,
+  processIncomingWhatsappWebhook,
+} from "../actions";
 import { WhatsappInstanceData } from "../types";
 
 interface WhatsappSettingsViewProps {
@@ -37,16 +43,22 @@ export function WhatsappSettingsView({
   const [formData, setFormData] = useState({
     name: initialInstance.name,
     phoneNumber: initialInstance.phoneNumber || "",
-    apiUrl: initialInstance.apiUrl || "https://api.waha.dev/v1",
+    apiUrl: initialInstance.apiUrl || "https://wa.da-marketing.pro",
     apiKey: initialInstance.apiKey || "",
   });
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
-  // QR Modal
+  // Real Evolution API QR Modal
   const [showQrModal, setShowQrModal] = useState(false);
-  const [qrScanning, setQrScanning] = useState(false);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrBase64, setQrBase64] = useState<string | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const [qrWebhookConfigured, setQrWebhookConfigured] = useState(false);
 
   // Webhook copy
   const [copiedWebhook, setCopiedWebhook] = useState(false);
@@ -56,8 +68,8 @@ export function WhatsappSettingsView({
   const [simName, setSimName] = useState("Алексей Смирнов");
   const [simType, setSimType] = useState<WhatsappMessageType>(WhatsappMessageType.TEXT);
   const [simText, setSimText] = useState("Здравствуйте! Хочу запросить коммерческое предложение и прайс-лист.");
-  const [simMediaUrl, setSimMediaUrl] = useState("https://images.unsplash.com/photo-1557804506-669a67965ba0?w=600");
-  const [simFileName, setSimFileName] = useState("Коммерческое_предложение.pdf");
+  const [simMediaUrl] = useState("https://images.unsplash.com/photo-1557804506-669a67965ba0?w=600");
+  const [simFileName] = useState("Коммерческое_предложение.pdf");
   const [isSimulating, setIsSimulating] = useState(false);
   const [simResult, setSimResult] = useState<{
     success: boolean;
@@ -71,6 +83,67 @@ export function WhatsappSettingsView({
   const webhookUrl = typeof window !== "undefined"
     ? `${window.location.origin}/api/webhooks/whatsapp`
     : "/api/webhooks/whatsapp";
+
+  const refreshLiveStatus = useCallback(async (silent = false) => {
+    if (!silent) {
+      setIsCheckingStatus(true);
+      setErrorMsg(null);
+    }
+    const res = await checkWhatsappConnectionState(instance.id);
+    if (!silent) setIsCheckingStatus(false);
+
+    if (res.ok) {
+      setInstance((prev) => ({
+        ...prev,
+        status: res.status,
+        phoneNumber: res.phoneNumber ?? prev.phoneNumber,
+      }));
+      if (res.phoneNumber) {
+        setFormData((prev) => ({ ...prev, phoneNumber: res.phoneNumber || prev.phoneNumber }));
+      }
+      return res;
+    } else if (!silent && res.error) {
+      setErrorMsg(res.error);
+    }
+    return null;
+  }, [instance.id]);
+
+  // При загрузке страницы сверяем фактический статус с Evolution API
+  useEffect(() => {
+    if (
+      initialInstance.apiUrl &&
+      !initialInstance.apiUrl.includes("api.waha.dev")
+    ) {
+      refreshLiveStatus(true);
+    }
+  }, [initialInstance.apiUrl, refreshLiveStatus]);
+
+  // Автоматическая проверка каждые 2.5 сек пока открыто окно с QR-кодом
+  useEffect(() => {
+    if (!showQrModal || qrLoading || !qrBase64) return;
+
+    const timer = setInterval(async () => {
+      const res = await checkWhatsappConnectionState(instance.id);
+      if (res?.ok && res.state === "open") {
+        setInstance((prev) => ({
+          ...prev,
+          status: WhatsappStatus.CONNECTED,
+          phoneNumber: res.phoneNumber ?? prev.phoneNumber,
+        }));
+        if (res.phoneNumber) {
+          setFormData((prev) => ({ ...prev, phoneNumber: res.phoneNumber || prev.phoneNumber }));
+        }
+        setShowQrModal(false);
+        setQrBase64(null);
+        setStatusBanner(
+          `WhatsApp успешно подключён${res.phoneNumber ? ` (${res.phoneNumber})` : ""}!`
+        );
+        setTimeout(() => setStatusBanner(null), 5000);
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [showQrModal, qrLoading, qrBase64, instance.id]);
 
   const handleCopyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl);
@@ -109,36 +182,69 @@ export function WhatsappSettingsView({
     }
   };
 
-  const handleConnectQr = async () => {
-    setQrScanning(true);
-    // Simulate successful QR scanning
-    setTimeout(async () => {
-      const res = await updateInstanceSettings(instance.id, {
+  const handleOpenAndFetchQr = async () => {
+    if (!isAdmin) return;
+    setShowQrModal(true);
+    setQrLoading(true);
+    setQrError(null);
+    setQrBase64(null);
+    setPairingCode(null);
+    setQrWebhookConfigured(false);
+    setErrorMsg(null);
+
+    const res = await requestWhatsappQrCode({
+      instanceId: instance.id,
+      name: formData.name,
+      apiUrl: formData.apiUrl,
+      apiKey: formData.apiKey,
+      webhookUrl: webhookUrl.startsWith("http") ? webhookUrl : undefined,
+    });
+
+    setQrLoading(false);
+
+    if (!res.success) {
+      setQrError(res.error || "Не удалось получить QR-код от Evolution API");
+      return;
+    }
+
+    if (res.instanceName && res.instanceName !== formData.name) {
+      setFormData((prev) => ({ ...prev, name: res.instanceName || prev.name }));
+    }
+    setQrWebhookConfigured(Boolean(res.webhookConfigured));
+
+    if (res.connected) {
+      setInstance((prev) => ({
+        ...prev,
         status: WhatsappStatus.CONNECTED,
-        phoneNumber: formData.phoneNumber || "+7 (701) 999-88-77",
-      });
-      if (res.success && res.instance) {
-        setInstance({
-          ...instance,
-          status: WhatsappStatus.CONNECTED,
-          phoneNumber: res.instance.phoneNumber,
-        });
+        phoneNumber: res.phoneNumber ?? prev.phoneNumber,
+      }));
+      if (res.phoneNumber) {
+        setFormData((prev) => ({ ...prev, phoneNumber: res.phoneNumber || prev.phoneNumber }));
       }
-      setQrScanning(false);
       setShowQrModal(false);
-    }, 1500);
+      setStatusBanner(
+        `Номер уже подключён в Evolution API${res.phoneNumber ? ` (${res.phoneNumber})` : ""}!`
+      );
+      setTimeout(() => setStatusBanner(null), 5000);
+      return;
+    }
+
+    setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
+    setQrBase64(res.qrBase64 || null);
+    setPairingCode(res.pairingCode || null);
   };
 
   const handleDisconnect = async () => {
     if (!confirm("Вы уверены, что хотите отключить этот номер WhatsApp?")) return;
-    const res = await updateInstanceSettings(instance.id, {
-      status: WhatsappStatus.DISCONNECTED,
-    });
+    setErrorMsg(null);
+    const res = await disconnectWhatsappInstance(instance.id);
     if (res.success && res.instance) {
       setInstance({
         ...instance,
         status: WhatsappStatus.DISCONNECTED,
       });
+    } else if (res.error) {
+      setErrorMsg(res.error);
     }
   };
 
@@ -214,6 +320,16 @@ export function WhatsappSettingsView({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => refreshLiveStatus(false)}
+            disabled={isCheckingStatus}
+            className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStatus ? "animate-spin" : ""}`} />
+            <span>Проверить статус</span>
+          </button>
+
           <Link
             href="/whatsapp"
             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
@@ -224,6 +340,13 @@ export function WhatsappSettingsView({
         </div>
       </div>
 
+      {statusBanner && (
+        <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 shadow-xs">
+          <Wifi className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{statusBanner}</span>
+        </div>
+      )}
+
       {/* Grid of Main Settings & Webhook */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Connection & Instance Card */}
@@ -232,7 +355,7 @@ export function WhatsappSettingsView({
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <Smartphone className="w-4 h-4 text-emerald-600" />
-                <h2 className="text-sm font-bold text-slate-900">Параметры инстанса WAHA / WhatsApp API</h2>
+                <h2 className="text-sm font-bold text-slate-900">Параметры инстанса Evolution API v2</h2>
               </div>
               {instance.status === WhatsappStatus.CONNECTED ? (
                 <button
@@ -247,12 +370,12 @@ export function WhatsappSettingsView({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setShowQrModal(true)}
-                  disabled={!isAdmin}
+                  onClick={handleOpenAndFetchQr}
+                  disabled={!isAdmin || qrLoading}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
                 >
                   <QrCode className="w-3.5 h-3.5" />
-                  <span>Получить QR-код</span>
+                  <span>{qrLoading ? "Загрузка QR..." : "Получить QR-код"}</span>
                 </button>
               )}
             </div>
@@ -275,15 +398,15 @@ export function WhatsappSettingsView({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Название инстанса
+                    Название инстанса (латиницей)
                   </label>
                   <input
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     disabled={!isAdmin}
-                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 disabled:bg-slate-50"
-                    placeholder="Например: Отдел продаж"
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono disabled:bg-slate-50"
+                    placeholder="da-agency-main"
                     required
                   />
                 </div>
@@ -298,31 +421,42 @@ export function WhatsappSettingsView({
                     onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
                     disabled={!isAdmin}
                     className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 disabled:bg-slate-50"
-                    placeholder="+7 (701) 999-88-77"
+                    placeholder="Определится автоматически после QR"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  URL шлюза (WAHA / Gateway Endpoint)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    URL шлюза (Evolution API v2 Endpoint)
+                  </label>
+                  {isAdmin && formData.apiUrl !== "https://wa.da-marketing.pro" && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, apiUrl: "https://wa.da-marketing.pro" })}
+                      className="text-[11px] font-medium text-emerald-700 hover:underline cursor-pointer"
+                    >
+                      Подставить https://wa.da-marketing.pro
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={formData.apiUrl}
                   onChange={(e) => setFormData({ ...formData, apiUrl: e.target.value })}
                   disabled={!isAdmin}
                   className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono disabled:bg-slate-50"
-                  placeholder="https://api.waha.dev/v1"
+                  placeholder="https://wa.da-marketing.pro"
                 />
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Адрес API-сервера WhatsApp (например локальный контейнер WAHA или облачный сервер)
+                  Укажите адрес вашего Evolution API (например, https://wa.da-marketing.pro или внутренний http://сервис:8080)
                 </span>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  API Ключ / Токен авторизации
+                  API Ключ (AUTHENTICATION_API_KEY)
                 </label>
                 <input
                   type="password"
@@ -330,7 +464,7 @@ export function WhatsappSettingsView({
                   onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
                   disabled={!isAdmin}
                   className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono disabled:bg-slate-50"
-                  placeholder="waha-secret-token-key"
+                  placeholder={isAdmin ? "Введите глобальный API-ключ Evolution API" : "Скрыто от менеджеров"}
                 />
               </div>
 
@@ -576,7 +710,7 @@ export function WhatsappSettingsView({
         </div>
       </div>
 
-      {/* QR Code Modal */}
+      {/* Real Evolution API QR Code Modal */}
       {showQrModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150">
@@ -588,7 +722,7 @@ export function WhatsappSettingsView({
               <button
                 type="button"
                 onClick={() => setShowQrModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer"
               >
                 ✕
               </button>
@@ -598,68 +732,66 @@ export function WhatsappSettingsView({
               Откройте WhatsApp на телефоне &rarr; Настройки &rarr; Связанные устройства &rarr; Привязка устройства
             </p>
 
-            {/* AmoCRM-styled QR Code Canvas */}
-            <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-2xl border border-slate-200">
-              <div className="w-48 h-48 bg-white p-3 rounded-xl border-2 border-slate-800 flex items-center justify-center relative shadow-sm">
-                {/* SVG mock QR pattern */}
-                <svg className="w-full h-full text-slate-900" viewBox="0 0 100 100" fill="currentColor">
-                  {/* Top-left marker */}
-                  <rect x="5" y="5" width="28" height="28" fill="#1e293b" rx="4" />
-                  <rect x="9" y="9" width="20" height="20" fill="white" rx="2" />
-                  <rect x="13" y="13" width="12" height="12" fill="#1e293b" rx="2" />
-                  {/* Top-right marker */}
-                  <rect x="67" y="5" width="28" height="28" fill="#1e293b" rx="4" />
-                  <rect x="71" y="9" width="20" height="20" fill="white" rx="2" />
-                  <rect x="75" y="13" width="12" height="12" fill="#1e293b" rx="2" />
-                  {/* Bottom-left marker */}
-                  <rect x="5" y="67" width="28" height="28" fill="#1e293b" rx="4" />
-                  <rect x="9" y="71" width="20" height="20" fill="white" rx="2" />
-                  <rect x="13" y="75" width="12" height="12" fill="#1e293b" rx="2" />
-                  {/* Random QR pixels */}
-                  <rect x="38" y="8" width="6" height="6" fill="#1e293b" />
-                  <rect x="48" y="12" width="6" height="6" fill="#1e293b" />
-                  <rect x="58" y="8" width="6" height="6" fill="#1e293b" />
-                  <rect x="38" y="24" width="6" height="6" fill="#1e293b" />
-                  <rect x="50" y="28" width="6" height="6" fill="#1e293b" />
-                  <rect x="8" y="38" width="6" height="6" fill="#1e293b" />
-                  <rect x="22" y="44" width="6" height="6" fill="#1e293b" />
-                  <rect x="38" y="38" width="12" height="12" fill="#059669" rx="3" />
-                  <rect x="54" y="42" width="6" height="6" fill="#1e293b" />
-                  <rect x="68" y="38" width="6" height="6" fill="#1e293b" />
-                  <rect x="82" y="44" width="6" height="6" fill="#1e293b" />
-                  <rect x="38" y="56" width="6" height="6" fill="#1e293b" />
-                  <rect x="48" y="64" width="6" height="6" fill="#1e293b" />
-                  <rect x="58" y="56" width="6" height="6" fill="#1e293b" />
-                  <rect x="44" y="78" width="6" height="6" fill="#1e293b" />
-                  <rect x="56" y="82" width="6" height="6" fill="#1e293b" />
-                  <rect x="74" y="74" width="6" height="6" fill="#1e293b" />
-                  <rect x="84" y="68" width="6" height="6" fill="#1e293b" />
-                  <rect x="78" y="86" width="6" height="6" fill="#1e293b" />
-                </svg>
-              </div>
-              <span className="text-[11px] text-slate-500 mt-3 font-medium">
-                QR-код обновляется каждые 30 секунд
-              </span>
+            {/* Real QR Code Container */}
+            <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-2xl border border-slate-200 min-h-[250px]">
+              {qrLoading ? (
+                <div className="flex flex-col items-center gap-3 text-slate-500">
+                  <RefreshCw className="w-8 h-8 animate-spin text-emerald-600" />
+                  <span className="text-xs font-medium text-center">
+                    Запрашиваем реальный QR-код у Evolution API...
+                  </span>
+                </div>
+              ) : qrError ? (
+                <div className="flex flex-col items-center gap-2 text-center px-2">
+                  <AlertCircle className="w-8 h-8 text-rose-500" />
+                  <p className="text-xs font-semibold text-rose-700">
+                    Не удалось получить QR-код
+                  </p>
+                  <p className="text-[11px] text-rose-600 leading-relaxed break-words">
+                    {qrError}
+                  </p>
+                </div>
+              ) : qrBase64 ? (
+                <>
+                  <div className="w-56 h-56 bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-center shadow-sm">
+                    <img
+                      src={qrBase64}
+                      alt="QR-код для подключения WhatsApp"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+
+                  {pairingCode && (
+                    <div className="mt-2 px-3 py-1 bg-white rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                      Код привязки: {pairingCode}
+                    </div>
+                  )}
+
+                  <span className="text-[11px] text-emerald-700 mt-3 font-medium flex items-center gap-1.5">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Ожидаем сканирования (проверяем статус автоматически)...
+                  </span>
+
+                  {qrWebhookConfigured && (
+                    <span className="text-[10px] text-slate-400 mt-1">
+                      Webhook входящих сообщений настроен автоматически
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-xs text-slate-400">QR-код не получен</span>
+              )}
             </div>
 
             <div className="space-y-2">
               <button
                 type="button"
-                onClick={handleConnectQr}
-                disabled={qrScanning}
-                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                onClick={handleOpenAndFetchQr}
+                disabled={qrLoading}
+                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
-                {qrScanning ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Авторизация WhatsApp...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Эмуляция успешного сканирования QR</span>
-                  </>
-                )}
+                <RefreshCw className={`w-3.5 h-3.5 ${qrLoading ? "animate-spin" : ""}`} />
+                <span>{qrLoading ? "Загрузка..." : "Обновить QR-код"}</span>
               </button>
 
               <button

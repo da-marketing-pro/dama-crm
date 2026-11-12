@@ -1,27 +1,261 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
+import { WhatsappMessageType, WhatsappStatus } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { processIncomingWhatsappWebhook } from "@/modules/whatsapp/actions";
-import { WhatsappMessageType } from "@prisma/client";
+import {
+  fetchMediaBase64FromEvolution,
+  formatJidToPhone,
+  normalizeEvolutionInstanceName,
+} from "@/lib/evolutionApi";
+
+async function resolveWhatsappInstance(instanceName?: string, explicitId?: string) {
+  if (explicitId) {
+    const byId = await prisma.whatsappInstance.findUnique({ where: { id: explicitId } });
+    if (byId) return byId;
+  }
+
+  if (instanceName) {
+    const all = await prisma.whatsappInstance.findMany();
+    const target = all.find(
+      (inst) =>
+        inst.name === instanceName ||
+        normalizeEvolutionInstanceName(inst.name, inst.id) === instanceName
+    );
+    if (target) return target;
+  }
+
+  return (
+    (await prisma.whatsappInstance.findFirst({ where: { isDefault: true } })) ||
+    (await prisma.whatsappInstance.findFirst())
+  );
+}
+
+function unwrapMessageContent(rawMsg: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!rawMsg) return {};
+  if (rawMsg.ephemeralMessage && typeof rawMsg.ephemeralMessage === "object") {
+    const inner = (rawMsg.ephemeralMessage as Record<string, unknown>).message as
+      | Record<string, unknown>
+      | undefined;
+    if (inner) return unwrapMessageContent(inner);
+  }
+  if (rawMsg.viewOnceMessage && typeof rawMsg.viewOnceMessage === "object") {
+    const inner = (rawMsg.viewOnceMessage as Record<string, unknown>).message as
+      | Record<string, unknown>
+      | undefined;
+    if (inner) return unwrapMessageContent(inner);
+  }
+  if (rawMsg.viewOnceMessageV2 && typeof rawMsg.viewOnceMessageV2 === "object") {
+    const inner = (rawMsg.viewOnceMessageV2 as Record<string, unknown>).message as
+      | Record<string, unknown>
+      | undefined;
+    if (inner) return unwrapMessageContent(inner);
+  }
+  if (rawMsg.documentWithCaptionMessage && typeof rawMsg.documentWithCaptionMessage === "object") {
+    const inner = (rawMsg.documentWithCaptionMessage as Record<string, unknown>).message as
+      | Record<string, unknown>
+      | undefined;
+    if (inner) return unwrapMessageContent(inner);
+  }
+  return rawMsg;
+}
+
+function toDataUri(raw: unknown, mimetype: string): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("data:") || trimmed.startsWith("http")) {
+    return trimmed;
+  }
+  return `data:${mimetype};base64,${trimmed}`;
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Поддержка как прямого формата, так и стандартного формата WAHA / Evolution API
-    let phone = body.phone || body.sender || body.from || body.remoteJid;
-    let senderName = body.senderName || body.pushName || body.name || "Клиент WhatsApp";
-    let textContent = body.textContent || body.text || body.message || body.body;
-    let mediaUrl = body.mediaUrl || body.url || body.media;
-    let fileName = body.fileName || body.filename;
+    // 1. Обработка событий Evolution API v2 (имеют поле event + data)
+    if (typeof body?.event === "string") {
+      const normalizedEvent = body.event.toLowerCase().replace("_", ".");
+      const instanceName = typeof body.instance === "string" ? body.instance : undefined;
+      const instance = await resolveWhatsappInstance(instanceName);
+
+      // 1A. Обновление статуса соединения (QR отсканирован / отвязан)
+      if (normalizedEvent === "connection.update") {
+        const state = String(body.data?.state || "").toLowerCase();
+        const statusReason = Number(body.data?.statusReason || 0);
+
+        if (instance) {
+          if (state === "open") {
+            const ownerPhone = formatJidToPhone(body.sender || body.data?.wuid);
+            await prisma.whatsappInstance.update({
+              where: { id: instance.id },
+              data: {
+                status: WhatsappStatus.CONNECTED,
+                ...(ownerPhone ? { phoneNumber: ownerPhone } : {}),
+              },
+            });
+            revalidatePath("/settings/whatsapp");
+            revalidatePath("/whatsapp");
+          } else if (state === "close" && statusReason === 401) {
+            await prisma.whatsappInstance.update({
+              where: { id: instance.id },
+              data: { status: WhatsappStatus.DISCONNECTED },
+            });
+            revalidatePath("/settings/whatsapp");
+            revalidatePath("/whatsapp");
+          }
+        }
+
+        return NextResponse.json({ success: true, handled: "connection.update", state });
+      }
+
+      // 1B. Игнорируем служебные события без ошибки, чтобы Evolution не ретраил вебхук
+      if (normalizedEvent !== "messages.upsert") {
+        return NextResponse.json({ success: true, ignored: body.event });
+      }
+
+      const msgItem = (Array.isArray(body.data) ? body.data[0] : body.data) as
+        | Record<string, unknown>
+        | undefined;
+      if (!msgItem) {
+        return NextResponse.json({ success: true, ignored: "empty_data" });
+      }
+
+      const key = (msgItem.key || {}) as Record<string, unknown>;
+      const rawRemoteJid = String(key.remoteJid || "");
+
+      if (!rawRemoteJid || rawRemoteJid === "status@broadcast") {
+        return NextResponse.json({ success: true, ignored: "status_broadcast" });
+      }
+      if (rawRemoteJid.endsWith("@g.us")) {
+        return NextResponse.json({ success: true, ignored: "group_message" });
+      }
+      if (key.fromMe === true) {
+        return NextResponse.json({ success: true, ignored: "from_me" });
+      }
+
+      // Если WhatsApp прислал LID, предпочитаем альтернативный телефонный JID если он есть
+      const phoneSource =
+        (typeof key.remoteJidAlt === "string" && key.remoteJidAlt) ||
+        (typeof key.participantPn === "string" && key.participantPn) ||
+        (typeof msgItem.senderPn === "string" && msgItem.senderPn) ||
+        rawRemoteJid;
+
+      const senderName =
+        (typeof msgItem.pushName === "string" && msgItem.pushName.trim()) ||
+        (typeof body.pushName === "string" && body.pushName.trim()) ||
+        undefined;
+
+      const rawMessage = unwrapMessageContent(
+        msgItem.message as Record<string, unknown> | undefined
+      );
+
+      let messageType: WhatsappMessageType = WhatsappMessageType.TEXT;
+      let textContent: string | undefined;
+      let mediaUrl: string | undefined;
+      let fileName: string | undefined;
+      let detectedMime = "application/octet-stream";
+
+      const imageMsg = rawMessage.imageMessage as Record<string, unknown> | undefined;
+      const audioMsg = (rawMessage.audioMessage || rawMessage.pttMessage) as
+        | Record<string, unknown>
+        | undefined;
+      const documentMsg = rawMessage.documentMessage as Record<string, unknown> | undefined;
+      const videoMsg = rawMessage.videoMessage as Record<string, unknown> | undefined;
+      const extMsg = rawMessage.extendedTextMessage as Record<string, unknown> | undefined;
+
+      if (imageMsg) {
+        messageType = WhatsappMessageType.IMAGE;
+        detectedMime = String(imageMsg.mimetype || "image/jpeg");
+        textContent = typeof imageMsg.caption === "string" ? imageMsg.caption : undefined;
+        mediaUrl = toDataUri(rawMessage.base64 || imageMsg.base64, detectedMime);
+      } else if (audioMsg) {
+        messageType = WhatsappMessageType.AUDIO;
+        detectedMime = String(audioMsg.mimetype || "audio/ogg");
+        mediaUrl = toDataUri(rawMessage.base64 || audioMsg.base64, detectedMime);
+      } else if (documentMsg) {
+        messageType = WhatsappMessageType.DOCUMENT;
+        detectedMime = String(documentMsg.mimetype || "application/pdf");
+        fileName =
+          (typeof documentMsg.fileName === "string" && documentMsg.fileName) ||
+          (typeof documentMsg.title === "string" && documentMsg.title) ||
+          "Документ.pdf";
+        textContent = typeof documentMsg.caption === "string" ? documentMsg.caption : undefined;
+        mediaUrl = toDataUri(rawMessage.base64 || documentMsg.base64, detectedMime);
+      } else if (videoMsg) {
+        const cap = typeof videoMsg.caption === "string" ? videoMsg.caption : "";
+        textContent = cap ? `[Видео] ${cap}` : "[Видеосообщение]";
+      } else {
+        textContent =
+          (typeof rawMessage.conversation === "string" && rawMessage.conversation) ||
+          (typeof extMsg?.text === "string" && extMsg.text) ||
+          (typeof msgItem.text === "string" && msgItem.text) ||
+          undefined;
+      }
+
+      // Если медиа-файл не был встроен в webhook как base64 — догружаем через Evolution API
+      if (
+        messageType !== WhatsappMessageType.TEXT &&
+        !mediaUrl &&
+        instance?.apiUrl &&
+        instance?.apiKey &&
+        typeof key.id === "string"
+      ) {
+        const evoMedia = await fetchMediaBase64FromEvolution({
+          apiUrl: instance.apiUrl,
+          apiKey: instance.apiKey,
+          instanceName: normalizeEvolutionInstanceName(instance.name, instance.id),
+          messageKey: {
+            id: key.id,
+            remoteJid: rawRemoteJid,
+            fromMe: false,
+          },
+          fallbackMime: detectedMime,
+        });
+        if (evoMedia) mediaUrl = evoMedia;
+      }
+
+      // Пропускаем пустые системные уведомления без текста и медиа
+      if (!textContent && !mediaUrl) {
+        return NextResponse.json({ success: true, ignored: "unsupported_or_empty_message" });
+      }
+
+      const result = await processIncomingWhatsappWebhook({
+        phone: phoneSource,
+        rawRemoteJid,
+        senderName,
+        messageType,
+        textContent,
+        mediaUrl,
+        fileName,
+        instanceId: instance?.id,
+      });
+
+      if (!result.success) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+      return NextResponse.json(result);
+    }
+
+    // 2. Прямой формат (симулятор / кастомные POST-интеграции)
+    const phone = body.phone || body.sender || body.from || body.remoteJid;
+    const senderName = body.senderName || body.pushName || body.name || "Клиент WhatsApp";
+    const textContent = body.textContent || body.text || body.message || body.body;
+    const mediaUrl = body.mediaUrl || body.url || body.media;
+    const fileName = body.fileName || body.filename;
     let messageType: WhatsappMessageType = WhatsappMessageType.TEXT;
 
-    // Определение типа сообщения
     if (body.messageType) {
       messageType = body.messageType as WhatsappMessageType;
     } else if (body.type === "image" || body.mimetype?.startsWith("image/")) {
       messageType = WhatsappMessageType.IMAGE;
     } else if (body.type === "audio" || body.type === "voice" || body.mimetype?.startsWith("audio/")) {
       messageType = WhatsappMessageType.AUDIO;
-    } else if (body.type === "document" || body.mimetype?.includes("pdf") || fileName?.endsWith(".pdf")) {
+    } else if (
+      body.type === "document" ||
+      body.mimetype?.includes("pdf") ||
+      fileName?.endsWith(".pdf")
+    ) {
       messageType = WhatsappMessageType.DOCUMENT;
     }
 
@@ -47,11 +281,9 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json(result);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Webhook processing error:", error);
-    return NextResponse.json(
-      { error: error?.message || "Internal server error" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Internal server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
