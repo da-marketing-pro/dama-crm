@@ -58,6 +58,8 @@ export function WhatsappSettingsView({
   // Real Evolution API QR Modal
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrLoading, setQrLoading] = useState(false);
+  const [awaitingWebhook, setAwaitingWebhook] = useState(false);
+  const [qrDiagnostic, setQrDiagnostic] = useState<string | null>(null);
   const [qrBase64, setQrBase64] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
@@ -123,10 +125,11 @@ export function WhatsappSettingsView({
     }
   }, [initialInstance.apiUrl, refreshLiveStatus]);
 
-  // Автоматическая проверка каждые 2.5 сек пока открыто окно с QR-кодом
+  // Автоматическая проверка каждые 2 сек пока открыто окно QR-кода (ждём скан ИЛИ асинхронный QRCODE_UPDATED)
   useEffect(() => {
-    if (!showQrModal || qrLoading || !qrBase64) return;
+    if (!showQrModal || qrLoading || (!qrBase64 && !awaitingWebhook)) return;
 
+    let waitTicks = 0;
     const timer = setInterval(async () => {
       const res = await checkWhatsappConnectionState(instance.id);
       if (res?.ok && res.state === "open") {
@@ -139,16 +142,38 @@ export function WhatsappSettingsView({
           setFormData((prev) => ({ ...prev, phoneNumber: res.phoneNumber || prev.phoneNumber }));
         }
         setShowQrModal(false);
+        setAwaitingWebhook(false);
         setQrBase64(null);
         setStatusBanner(
           `WhatsApp успешно подключён${res.phoneNumber ? ` (${res.phoneNumber})` : ""}!`
         );
         setTimeout(() => setStatusBanner(null), 5000);
+        return;
       }
-    }, 2500);
+
+      if (res?.ok && !qrBase64 && res.qrBase64) {
+        setQrBase64(res.qrBase64);
+        setPairingCode(res.pairingCode || null);
+        setAwaitingWebhook(false);
+        setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
+        return;
+      }
+
+      if (!qrBase64 && awaitingWebhook) {
+        waitTicks += 1;
+        if (waitTicks >= 10) {
+          setAwaitingWebhook(false);
+          setQrError(
+            `Evolution API не прислал QR-код${
+              qrDiagnostic ? ` (${qrDiagnostic})` : ""
+            }. Нажмите «Обновить QR-код» ещё раз.`
+          );
+        }
+      }
+    }, 2000);
 
     return () => clearInterval(timer);
-  }, [showQrModal, qrLoading, qrBase64, instance.id]);
+  }, [showQrModal, qrLoading, qrBase64, awaitingWebhook, qrDiagnostic, instance.id]);
 
   const handleCopyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl);
@@ -191,6 +216,8 @@ export function WhatsappSettingsView({
     if (!isAdmin) return;
     setShowQrModal(true);
     setQrLoading(true);
+    setAwaitingWebhook(false);
+    setQrDiagnostic(null);
     setQrError(null);
     setQrBase64(null);
     setPairingCode(null);
@@ -234,9 +261,21 @@ export function WhatsappSettingsView({
       return;
     }
 
-    setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
-    setQrBase64(res.qrBase64 || null);
-    setPairingCode(res.pairingCode || null);
+    if (res.qrBase64) {
+      setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
+      setQrBase64(res.qrBase64);
+      setPairingCode(res.pairingCode || null);
+      return;
+    }
+
+    if (res.awaitingWebhook) {
+      setInstance((prev) => ({ ...prev, status: WhatsappStatus.QR_READY }));
+      setAwaitingWebhook(true);
+      setQrDiagnostic(res.diagnostic || null);
+      return;
+    }
+
+    setQrError("Evolution API не вернул QR-код. Нажмите «Обновить QR-код».");
   };
 
   const handleDisconnect = async () => {
@@ -765,11 +804,13 @@ export function WhatsappSettingsView({
 
             {/* Real QR Code Container */}
             <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-2xl border border-slate-200 min-h-[250px]">
-              {qrLoading ? (
+              {qrLoading || (awaitingWebhook && !qrBase64) ? (
                 <div className="flex flex-col items-center gap-3 text-slate-500">
                   <RefreshCw className="w-8 h-8 animate-spin text-emerald-600" />
                   <span className="text-xs font-medium text-center">
-                    Запрашиваем реальный QR-код у Evolution API...
+                    {awaitingWebhook && !qrBase64
+                      ? "Ожидаем генерацию QR-кода от Evolution API..."
+                      : "Запрашиваем реальный QR-код у Evolution API..."}
                   </span>
                 </div>
               ) : qrError ? (

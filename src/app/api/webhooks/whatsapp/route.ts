@@ -8,6 +8,7 @@ import {
   fetchMediaBase64FromEvolution,
   formatJidToPhone,
   normalizeEvolutionInstanceName,
+  resolveQrDataUrl,
 } from "@/lib/evolutionApi";
 
 async function resolveWhatsappInstance(instanceName?: string, explicitId?: string) {
@@ -121,6 +122,9 @@ export async function POST(req: NextRequest) {
               where: { id: instance.id },
               data: {
                 status: WhatsappStatus.CONNECTED,
+                lastQrCode: null,
+                lastPairingCode: null,
+                lastQrUpdatedAt: null,
                 ...(ownerPhone ? { phoneNumber: ownerPhone } : {}),
               },
             });
@@ -129,7 +133,12 @@ export async function POST(req: NextRequest) {
           } else if (state === "close" && statusReason === 401) {
             await prisma.whatsappInstance.update({
               where: { id: instance.id },
-              data: { status: WhatsappStatus.DISCONNECTED },
+              data: {
+                status: WhatsappStatus.DISCONNECTED,
+                lastQrCode: null,
+                lastPairingCode: null,
+                lastQrUpdatedAt: null,
+              },
             });
             revalidatePath("/settings/whatsapp");
             revalidatePath("/whatsapp");
@@ -137,6 +146,29 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json({ success: true, handled: "connection.update", state });
+      }
+
+      // 1A-bis. Асинхронная доставка QR-кода от Evolution API v2 (QRCODE_UPDATED)
+      if (normalizedEvent === "qrcode.updated") {
+        const qr = await resolveQrDataUrl(
+          (body.data || {}) as Record<string, unknown> | undefined
+        );
+        if (instance && qr.qrBase64) {
+          await prisma.whatsappInstance.update({
+            where: { id: instance.id },
+            data: {
+              status: WhatsappStatus.QR_READY,
+              lastQrCode: qr.qrBase64,
+              lastPairingCode: qr.pairingCode,
+              lastQrUpdatedAt: new Date(),
+            },
+          });
+        }
+        return NextResponse.json({
+          success: true,
+          handled: "qrcode.updated",
+          stored: Boolean(instance && qr.qrBase64),
+        });
       }
 
       // 1B. События ярлыков WhatsApp Business (Вариант 4: Списки / Labels)

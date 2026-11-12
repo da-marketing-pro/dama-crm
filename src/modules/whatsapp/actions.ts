@@ -160,13 +160,18 @@ export async function requestWhatsappQrCode(params: {
       };
     }
 
-    // Сохраняем актуальные поля перед обращением к шлюзу
+    const requestStartedAt = new Date();
+
+    // Сохраняем актуальные поля перед обращением к шлюзу и сбрасываем устаревший кэш QR
     instance = await prisma.whatsappInstance.update({
       where: { id: instance.id },
       data: {
         name: nextName,
         apiUrl: nextApiUrl,
         apiKey: nextApiKey,
+        lastQrCode: null,
+        lastPairingCode: null,
+        lastQrUpdatedAt: null,
       },
     });
 
@@ -185,6 +190,24 @@ export async function requestWhatsappQrCode(params: {
       };
     }
 
+    let resolvedQrBase64 = evoResult.qrBase64 || null;
+    let resolvedPairingCode = evoResult.pairingCode || null;
+
+    if (!evoResult.connected && !resolvedQrBase64) {
+      const freshInstance = await prisma.whatsappInstance.findUnique({
+        where: { id: instance.id },
+        select: { lastQrCode: true, lastPairingCode: true, lastQrUpdatedAt: true },
+      });
+      if (
+        freshInstance?.lastQrCode &&
+        freshInstance.lastQrUpdatedAt &&
+        freshInstance.lastQrUpdatedAt >= requestStartedAt
+      ) {
+        resolvedQrBase64 = freshInstance.lastQrCode;
+        resolvedPairingCode = freshInstance.lastPairingCode;
+      }
+    }
+
     const nextStatus = evoResult.connected
       ? WhatsappStatus.CONNECTED
       : WhatsappStatus.QR_READY;
@@ -193,6 +216,9 @@ export async function requestWhatsappQrCode(params: {
       where: { id: instance.id },
       data: {
         status: nextStatus,
+        ...(evoResult.connected
+          ? { lastQrCode: null, lastPairingCode: null, lastQrUpdatedAt: null }
+          : {}),
         ...(evoResult.phoneNumber ? { phoneNumber: evoResult.phoneNumber } : {}),
       },
     });
@@ -203,8 +229,10 @@ export async function requestWhatsappQrCode(params: {
     return {
       success: true,
       connected: Boolean(evoResult.connected),
-      qrBase64: evoResult.qrBase64 || null,
-      pairingCode: evoResult.pairingCode || null,
+      qrBase64: resolvedQrBase64,
+      pairingCode: resolvedPairingCode,
+      awaitingWebhook: Boolean(!evoResult.connected && !resolvedQrBase64 && evoResult.awaitingWebhook),
+      diagnostic: evoResult.diagnostic,
       status: updated.status,
       phoneNumber: updated.phoneNumber,
       instanceName,
@@ -262,11 +290,18 @@ export async function checkWhatsappConnectionState(instanceId: string) {
 
     const nextPhone = evoStatus.phoneNumber || instance.phoneNumber;
 
-    if (nextStatus !== instance.status || (evoStatus.phoneNumber && evoStatus.phoneNumber !== instance.phoneNumber)) {
+    if (
+      nextStatus !== instance.status ||
+      (evoStatus.state === "open" && instance.lastQrCode) ||
+      (evoStatus.phoneNumber && evoStatus.phoneNumber !== instance.phoneNumber)
+    ) {
       await prisma.whatsappInstance.update({
         where: { id: instance.id },
         data: {
           status: nextStatus,
+          ...(evoStatus.state === "open"
+            ? { lastQrCode: null, lastPairingCode: null, lastQrUpdatedAt: null }
+            : {}),
           ...(evoStatus.phoneNumber ? { phoneNumber: evoStatus.phoneNumber } : {}),
         },
       });
@@ -274,11 +309,20 @@ export async function checkWhatsappConnectionState(instanceId: string) {
       revalidatePath("/whatsapp");
     }
 
+    const hasFreshQr = Boolean(
+      evoStatus.state !== "open" &&
+        instance.lastQrCode &&
+        instance.lastQrUpdatedAt &&
+        Date.now() - instance.lastQrUpdatedAt.getTime() < 90_000
+    );
+
     return {
       ok: true,
       state: evoStatus.state,
       status: nextStatus,
       phoneNumber: nextPhone,
+      qrBase64: hasFreshQr ? instance.lastQrCode : null,
+      pairingCode: hasFreshQr ? instance.lastPairingCode : null,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка проверки статуса";
