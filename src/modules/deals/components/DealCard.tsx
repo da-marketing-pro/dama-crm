@@ -1,24 +1,51 @@
 "use client";
 
+import { useState } from "react";
 import { DealItem } from "../types";
+import { moveDealPipeline } from "../actions";
 import { formatCurrency } from "@/lib/utils";
 import {
-  Phone,
   Building,
-  User,
   Clock,
   CheckCircle2,
   AlertCircle,
-  CreditCard,
+  ArrowRightLeft,
 } from "lucide-react";
+
+interface PipelineOption {
+  id: string;
+  name: string;
+}
 
 interface DealCardProps {
   deal: DealItem;
+  pipelines?: PipelineOption[];
   onSelect: (deal: DealItem) => void;
   onDragStart?: (e: React.DragEvent, dealId: string) => void;
+  onPipelineMoved?: () => void;
 }
 
-export function DealCard({ deal, onSelect, onDragStart }: DealCardProps) {
+export function DealCard({
+  deal,
+  pipelines = [],
+  onSelect,
+  onDragStart,
+  onPipelineMoved,
+}: DealCardProps) {
+  const [isMovingPipeline, setIsMovingPipeline] = useState(false);
+
+  const handleQuickMovePipeline = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    e.stopPropagation();
+    const targetPipelineId = e.target.value;
+    if (!targetPipelineId || targetPipelineId === deal.pipelineId) return;
+
+    setIsMovingPipeline(true);
+    const res = await moveDealPipeline(deal.id, targetPipelineId);
+    setIsMovingPipeline(false);
+    if (res.success && onPipelineMoved) {
+      onPipelineMoved();
+    }
+  };
   // Calculate total paid in deal's currency
   const totalPaid = deal.payments.reduce((sum, p) => {
     // If currency matches, add directly; else use amountInBaseCurrency approximation
@@ -120,6 +147,31 @@ export function DealCard({ deal, onSelect, onDragStart }: DealCardProps) {
               style={{ width: `${percentPaid}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* Quick Move Pipeline right on card */}
+      {pipelines.length > 1 && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="pt-1 flex items-center gap-1.5"
+        >
+          <ArrowRightLeft className="w-3 h-3 text-slate-400 shrink-0" />
+          <select
+            aria-label="Переместить лид в другую воронку"
+            value={deal.pipelineId}
+            disabled={isMovingPipeline}
+            onChange={handleQuickMovePipeline}
+            className="w-full px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer disabled:opacity-50 truncate"
+          >
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {isMovingPipeline ? "Перенос..." : `Воронка: ${p.name}`}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 

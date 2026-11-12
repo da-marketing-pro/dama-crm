@@ -998,6 +998,7 @@ export async function fetchEvolutionChats(params: {
   apiUrl: string;
   apiKey: string;
   instanceName: string;
+  labelNameById?: Map<string, string>;
 }): Promise<{ ok: boolean; chats: EvolutionChatInfo[]; error?: string }> {
   const [chatsRes, contactsRes] = await Promise.all([
     evoFetch<unknown>(
@@ -1041,11 +1042,21 @@ export async function fetchEvolutionChats(params: {
       continue;
     }
 
+    const lastMessage = item.lastMessage as Record<string, unknown> | undefined;
+    const lmKey = lastMessage?.key as Record<string, unknown> | undefined;
     const contactMatch = contactByJid.get(rawJid);
+
+    const candidateJids = [
+      rawJid,
+      typeof item.remoteJidAlt === "string" ? item.remoteJidAlt : "",
+      typeof lmKey?.remoteJidAlt === "string" ? lmKey.remoteJidAlt : "",
+      typeof lmKey?.senderPn === "string" ? lmKey.senderPn : "",
+      contactMatch?.remoteJidAlt || "",
+      contactMatch?.remoteJid || "",
+    ].filter(Boolean);
+
     const resolvedJid =
-      rawJid.endsWith("@lid") && contactMatch?.remoteJidAlt && !contactMatch.remoteJidAlt.endsWith("@lid")
-        ? contactMatch.remoteJidAlt
-        : rawJid;
+      candidateJids.find((j) => !j.endsWith("@lid")) || candidateJids[0] || rawJid;
 
     const phone = formatJidToPhone(resolvedJid) || resolvedJid;
     if (!phone || seenJids.has(phone)) continue;
@@ -1055,22 +1066,30 @@ export async function fetchEvolutionChats(params: {
       (contactMatch?.displayName && contactMatch.displayName.trim()) ||
       (typeof item.name === "string" && item.name.trim()) ||
       (typeof item.pushName === "string" && item.pushName.trim()) ||
+      (typeof lastMessage?.pushName === "string" && lastMessage.pushName.trim()) ||
       phone;
 
-    const lastMessage = item.lastMessage as Record<string, unknown> | undefined;
     const lastMessageText = extractChatLastMessagePreview(lastMessage);
     const lastMessageAt = extractTimestampIso(lastMessage?.messageTimestamp, item.updatedAt);
 
     const rawLabels = Array.isArray(item.labels) ? item.labels : [];
-    const labels = rawLabels
-      .map((l) => {
-        if (typeof l === "string") return l.trim();
-        if (l && typeof l === "object" && typeof (l as Record<string, unknown>).name === "string") {
-          return String((l as Record<string, unknown>).name).trim();
+    const labelSet = new Set<string>();
+    for (const l of rawLabels) {
+      let resolvedLabel = "";
+      if (typeof l === "string") {
+        const key = l.trim();
+        resolvedLabel = params.labelNameById?.get(key) || key;
+      } else if (l && typeof l === "object") {
+        const obj = l as Record<string, unknown>;
+        if (typeof obj.name === "string" && obj.name.trim()) {
+          resolvedLabel = obj.name.trim();
+        } else if (obj.id != null || obj.labelId != null) {
+          const key = String(obj.id ?? obj.labelId).trim();
+          resolvedLabel = params.labelNameById?.get(key) || key;
         }
-        return "";
-      })
-      .filter(Boolean);
+      }
+      if (resolvedLabel) labelSet.add(resolvedLabel);
+    }
 
     chats.push({
       jid: resolvedJid,
@@ -1079,7 +1098,7 @@ export async function fetchEvolutionChats(params: {
       lastMessageText,
       lastMessageAt,
       archived: Boolean(item.archived),
-      labels,
+      labels: Array.from(labelSet),
     });
   }
 

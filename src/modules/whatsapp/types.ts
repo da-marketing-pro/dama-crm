@@ -7,6 +7,17 @@ export interface WhatsappLabelItem {
   color?: string;
 }
 
+export interface WhatsappPipelineOption {
+  id: string;
+  name: string;
+  stages: {
+    id: string;
+    name: string;
+    color: string;
+    type: string;
+  }[];
+}
+
 export interface WhatsappInstanceData {
   id: string;
   name: string;

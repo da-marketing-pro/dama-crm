@@ -122,6 +122,16 @@ export async function createDeal(data: {
   }
 }
 
+function resolveClosedAtByStageType(
+  stageType: StageType,
+  currentClosedAt: Date | null
+): Date | null {
+  if (stageType === StageType.WON || stageType === StageType.LOST) {
+    return currentClosedAt || new Date();
+  }
+  return null;
+}
+
 // 3. Перемещение сделки между этапами (Drag and Drop)
 export async function moveDealStage(dealId: string, newStageId: string) {
   try {
@@ -145,16 +155,12 @@ export async function moveDealStage(dealId: string, newStageId: string) {
       return { success: false, error: "Вы можете перемещать только свои сделки" };
     }
 
-    let closedAt: Date | null = deal.closedAt;
-    if (targetStage.type === StageType.WON || targetStage.type === StageType.LOST) {
-      closedAt = new Date();
-    } else if (targetStage.type === StageType.OPEN) {
-      closedAt = null;
-    }
+    const closedAt = resolveClosedAtByStageType(targetStage.type, deal.closedAt);
 
     await prisma.deal.update({
       where: { id: dealId },
       data: {
+        pipelineId: targetStage.pipelineId,
         stageId: newStageId,
         closedAt,
       },
@@ -169,6 +175,84 @@ export async function moveDealStage(dealId: string, newStageId: string) {
   }
 }
 
+// 3.1 Перемещение сделки в другую воронку (напрямую с карточки или из drawer)
+export async function moveDealPipeline(
+  dealId: string,
+  targetPipelineId: string,
+  targetStageId?: string
+) {
+  try {
+    const user = await getAuthUser();
+
+    const [deal, targetPipeline] = await Promise.all([
+      prisma.deal.findUnique({
+        where: { id: dealId },
+        include: { pipeline: { select: { name: true } } },
+      }),
+      prisma.pipeline.findUnique({
+        where: { id: targetPipelineId },
+        include: {
+          stages: {
+            orderBy: { order: "asc" },
+          },
+        },
+      }),
+    ]);
+
+    if (!deal || !targetPipeline) {
+      return { success: false, error: "Сделка или целевая воронка не найдены" };
+    }
+
+    if (user.role === Role.MANAGER && deal.assignedToId !== user.id) {
+      return { success: false, error: "Вы можете перемещать только свои сделки" };
+    }
+
+    if (targetPipeline.stages.length === 0) {
+      return { success: false, error: "В выбранной воронке нет этапов" };
+    }
+
+    const chosenStage =
+      (targetStageId && targetPipeline.stages.find((s) => s.id === targetStageId)) ||
+      targetPipeline.stages.find((s) => s.type === StageType.OPEN) ||
+      targetPipeline.stages[0];
+
+    const closedAt = resolveClosedAtByStageType(chosenStage.type, deal.closedAt);
+
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: {
+        pipelineId: targetPipeline.id,
+        stageId: chosenStage.id,
+        closedAt,
+      },
+    });
+
+    if (deal.contactId && deal.pipelineId !== targetPipeline.id) {
+      await prisma.contactNote.create({
+        data: {
+          contactId: deal.contactId,
+          authorId: user.id,
+          content: `Сделка «${deal.title}» перемещена из воронки «${deal.pipeline.name}» в воронку «${targetPipeline.name}» (этап «${chosenStage.name}»).`,
+        },
+      });
+    }
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/whatsapp");
+    revalidatePath("/");
+    return {
+      success: true,
+      pipelineId: targetPipeline.id,
+      stageId: chosenStage.id,
+      stageName: chosenStage.name,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка перемещения в другую воронку";
+    return { success: false, error: message };
+  }
+}
+
 // 4. Обновление сделки
 export async function updateDeal(
   dealId: string,
@@ -176,6 +260,7 @@ export async function updateDeal(
     title?: string;
     totalBudget?: number;
     currency?: Currency;
+    pipelineId?: string;
     stageId?: string;
     assignedToId?: string;
   }
@@ -189,11 +274,37 @@ export async function updateDeal(
       return { success: false, error: "Доступ ограничен: только для ответственного или администратора" };
     }
 
-    const updateData: any = {};
+    const updateData: {
+      title?: string;
+      totalBudget?: number;
+      currency?: Currency;
+      pipelineId?: string;
+      stageId?: string;
+      closedAt?: Date | null;
+      assignedToId?: string;
+    } = {};
     if (data.title) updateData.title = data.title.trim();
     if (data.totalBudget !== undefined) updateData.totalBudget = Number(data.totalBudget);
     if (data.currency) updateData.currency = data.currency;
-    if (data.stageId) updateData.stageId = data.stageId;
+
+    const targetPipelineId = data.pipelineId || deal.pipelineId;
+    if (data.pipelineId || data.stageId) {
+      const targetStages = await prisma.stage.findMany({
+        where: { pipelineId: targetPipelineId },
+        orderBy: { order: "asc" },
+      });
+      if (targetStages.length === 0) {
+        return { success: false, error: "В выбранной воронке нет этапов" };
+      }
+      const chosenStage =
+        (data.stageId && targetStages.find((s) => s.id === data.stageId)) ||
+        targetStages.find((s) => s.type === StageType.OPEN) ||
+        targetStages[0];
+      updateData.pipelineId = targetPipelineId;
+      updateData.stageId = chosenStage.id;
+      updateData.closedAt = resolveClosedAtByStageType(chosenStage.type, deal.closedAt);
+    }
+
     if (data.assignedToId && user.role === Role.ADMIN) {
       updateData.assignedToId = data.assignedToId;
     }
@@ -204,6 +315,8 @@ export async function updateDeal(
     });
 
     revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/whatsapp");
     revalidatePath("/");
     return { success: true };
   } catch (err: unknown) {

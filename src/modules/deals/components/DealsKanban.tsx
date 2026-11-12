@@ -7,16 +7,25 @@ import { moveDealStage } from "../actions";
 import { formatCurrency } from "@/lib/utils";
 import { StageType } from "@prisma/client";
 
+interface PipelineOption {
+  id: string;
+  name: string;
+}
+
 interface DealsKanbanProps {
   stages: StageWithDeals[];
+  pipelines?: PipelineOption[];
   onSelectDeal: (deal: DealItem) => void;
+  onPipelineMoved?: () => void;
   currencyRateUsd?: number;
   currencyRateRub?: number;
 }
 
 export function DealsKanban({
   stages,
+  pipelines = [],
   onSelectDeal,
+  onPipelineMoved,
   currencyRateUsd = 495,
   currencyRateRub = 5.2,
 }: DealsKanbanProps) {
@@ -115,8 +124,10 @@ export function DealsKanban({
                   <DealCard
                     key={deal.id}
                     deal={deal}
+                    pipelines={pipelines}
                     onSelect={onSelectDeal}
                     onDragStart={handleDragStart}
+                    onPipelineMoved={onPipelineMoved}
                   />
                 ))
               )}

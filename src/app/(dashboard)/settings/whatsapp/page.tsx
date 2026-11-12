@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
   getOrCreateDefaultInstance,
+  getPipelinesForChat,
   getWhatsappFilteringData,
 } from "@/modules/whatsapp/actions";
 import { WhatsappSettingsView } from "@/modules/whatsapp/components/WhatsappSettingsView";
@@ -23,15 +24,21 @@ export default async function WhatsappSettingsPage() {
   const isAdmin = session.user.role === "ADMIN";
   const instance = await getOrCreateDefaultInstance();
 
-  const filteringData: WhatsappFilteringData = isAdmin
-    ? await getWhatsappFilteringData(instance.id)
-    : {
-        leadFilterMode: normalizeLeadFilterMode(instance.leadFilterMode),
-        ignoredLabelNames: [...DEFAULT_IGNORED_LABEL_NAMES],
-        leadKeywords: [],
-        cachedLabels: [],
-        ignoredNumbers: [],
-      };
+  const [filteringData, pipelines] = isAdmin
+    ? await Promise.all([
+        getWhatsappFilteringData(instance.id),
+        getPipelinesForChat(),
+      ])
+    : [
+        {
+          leadFilterMode: normalizeLeadFilterMode(instance.leadFilterMode),
+          ignoredLabelNames: [...DEFAULT_IGNORED_LABEL_NAMES],
+          leadKeywords: [],
+          cachedLabels: [],
+          ignoredNumbers: [],
+        } satisfies WhatsappFilteringData,
+        [],
+      ];
 
   const formattedInstance: WhatsappInstanceData = {
     id: instance.id,
@@ -53,6 +60,7 @@ export default async function WhatsappSettingsPage() {
     <WhatsappSettingsView
       initialInstance={formattedInstance}
       initialFilteringData={filteringData}
+      pipelines={pipelines}
       isAdmin={isAdmin}
     />
   );

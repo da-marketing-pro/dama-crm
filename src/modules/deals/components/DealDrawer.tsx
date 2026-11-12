@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DealItem, PaymentItem, TaskItem } from "../types";
 import { updateDeal, deleteDeal } from "../actions";
 import { addPayment, deletePayment } from "@/modules/payments/actions";
@@ -27,6 +28,7 @@ import {
   Send,
   MessageSquare,
   MessageCircle,
+  ExternalLink,
 } from "lucide-react";
 
 interface PipelineInfo {
@@ -71,6 +73,7 @@ export function DealDrawer({
   const [title, setTitle] = useState(deal.title);
   const [budget, setBudget] = useState(deal.totalBudget.toString());
   const [currency, setCurrency] = useState<Currency>(deal.currency);
+  const [pipelineId, setPipelineId] = useState(deal.pipelineId);
   const [stageId, setStageId] = useState(deal.stageId);
   const [assignedToId, setAssignedToId] = useState(deal.assignedToId || "");
   const [isSaving, setIsSaving] = useState(false);
@@ -97,7 +100,17 @@ export function DealDrawer({
   const [completionComment, setCompletionComment] = useState("");
   const [dealRightTab, setDealRightTab] = useState<"finance" | "whatsapp">("finance");
 
-  const currentPipeline = pipelines.find((p) => p.id === deal.pipelineId);
+  const currentPipeline = pipelines.find((p) => p.id === pipelineId) || pipelines[0];
+
+  const handlePipelineChange = (nextPipelineId: string) => {
+    setPipelineId(nextPipelineId);
+    const nextPipe = pipelines.find((p) => p.id === nextPipelineId);
+    const defaultStage =
+      nextPipe?.stages.find((s) => s.type === StageType.OPEN) || nextPipe?.stages[0];
+    if (defaultStage) {
+      setStageId(defaultStage.id);
+    }
+  };
 
   // Financial calculations
   const totalPaid = deal.payments.reduce((sum, p) => sum + p.amount, 0);
@@ -115,6 +128,7 @@ export function DealDrawer({
       title,
       totalBudget: parseFloat(budget) || 0,
       currency,
+      pipelineId,
       stageId,
       assignedToId: isAdmin ? assignedToId : undefined,
     });
@@ -273,20 +287,35 @@ export function DealDrawer({
 
             {/* Linked Contact Card */}
             <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
                   Клиент сделки
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setDealRightTab("whatsapp")}
-                  className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" />
-                  <span>Чат WhatsApp</span>
-                </button>
+                <div className="flex items-center gap-2.5">
+                  <Link
+                    href={`/contacts?contactId=${deal.contactId}`}
+                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                  >
+                    <span>Карточка контакта</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setDealRightTab("whatsapp")}
+                    className="text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span>Чат WhatsApp</span>
+                  </button>
+                </div>
               </div>
-              <div className="font-bold text-xs text-slate-900">{deal.contact.name}</div>
+              <Link
+                href={`/contacts?contactId=${deal.contactId}`}
+                className="font-bold text-xs text-slate-900 hover:text-blue-600 transition-colors inline-flex items-center gap-1.5"
+              >
+                <span>{deal.contact.name}</span>
+                <ExternalLink className="w-3 h-3 text-slate-400" />
+              </Link>
               <div className="flex items-center gap-1.5 text-xs text-slate-600">
                 <Phone className="w-3 h-3 text-slate-400" />
                 <span>{deal.contact.phone}</span>
@@ -325,22 +354,41 @@ export function DealDrawer({
                 />
               </div>
 
-              {/* Stage selector */}
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Этап в воронке
-                </label>
-                <select
-                  value={stageId}
-                  onChange={(e) => setStageId(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
-                >
-                  {currentPipeline?.stages.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.type})
-                    </option>
-                  ))}
-                </select>
+              {/* Pipeline & Stage selectors side by side */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Воронка
+                  </label>
+                  <select
+                    value={pipelineId}
+                    onChange={(e) => handlePipelineChange(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                  >
+                    {pipelines.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Этап в воронке
+                  </label>
+                  <select
+                    value={stageId}
+                    onChange={(e) => setStageId(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-semibold"
+                  >
+                    {currentPipeline?.stages.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Budget & Currency */}

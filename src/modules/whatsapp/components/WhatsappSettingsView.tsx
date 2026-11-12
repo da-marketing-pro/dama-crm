@@ -31,15 +31,28 @@ import {
 import { WhatsappFilteringData, WhatsappInstanceData } from "../types";
 import { WhatsappFilterSettings } from "./WhatsappFilterSettings";
 
+interface PipelineOption {
+  id: string;
+  name: string;
+  stages: {
+    id: string;
+    name: string;
+    color: string;
+    type: string;
+  }[];
+}
+
 interface WhatsappSettingsViewProps {
   initialInstance: WhatsappInstanceData;
   initialFilteringData: WhatsappFilteringData;
+  pipelines: PipelineOption[];
   isAdmin: boolean;
 }
 
 export function WhatsappSettingsView({
   initialInstance,
   initialFilteringData,
+  pipelines,
   isAdmin,
 }: WhatsappSettingsViewProps) {
   const [instance, setInstance] = useState<WhatsappInstanceData>(initialInstance);
@@ -775,6 +788,7 @@ export function WhatsappSettingsView({
         <WhatsappFilterSettings
           instanceId={instance.id}
           initialData={initialFilteringData}
+          pipelines={pipelines}
           webhookUrl={webhookUrl}
           isGatewayConfigured={Boolean(
             formData.apiUrl?.trim() &&

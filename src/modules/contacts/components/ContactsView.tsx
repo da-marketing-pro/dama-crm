@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ContactDetail, CustomFieldDef } from "../types";
 import { ContactsTable } from "./ContactsTable";
 import { CreateContactModal } from "./CreateContactModal";
@@ -27,6 +27,7 @@ interface ContactsViewProps {
   users: { id: string; name: string }[];
   customFieldDefs: CustomFieldDef[];
   pipelines: PipelineInfo[];
+  initialSelectedContactId?: string;
 }
 
 export function ContactsView({
@@ -36,10 +37,22 @@ export function ContactsView({
   users,
   customFieldDefs,
   pipelines,
+  initialSelectedContactId,
 }: ContactsViewProps) {
   const router = useRouter();
-  const [selectedContact, setSelectedContact] = useState<ContactDetail | null>(null);
+  const [selectedContact, setSelectedContact] = useState<ContactDetail | null>(() => {
+    if (!initialSelectedContactId) return null;
+    return contacts.find((c) => c.id === initialSelectedContactId) || null;
+  });
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!initialSelectedContactId) return;
+    const match = contacts.find((c) => c.id === initialSelectedContactId);
+    if (match) {
+      setSelectedContact(match);
+    }
+  }, [initialSelectedContactId, contacts]);
 
   // Overall statistics for the view
   const totalContactsCount = contacts.length;

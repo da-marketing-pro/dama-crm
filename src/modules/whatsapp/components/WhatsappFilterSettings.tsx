@@ -15,16 +15,20 @@ import {
   Sparkles,
   Webhook,
   X,
+  UserPlus,
+  Briefcase,
 } from "lucide-react";
 import {
   EvolutionSyncedChatItem,
   WhatsappFilteringData,
   WhatsappLabelItem,
+  WhatsappPipelineOption,
 } from "../types";
 import {
   addIgnoredWhatsappNumbers,
   fetchWhatsappChatsAndLabelsFromGateway,
   getWhatsappFilteringData,
+  importWhatsappLeadChatsToCrm,
   removeIgnoredWhatsappNumber,
   syncEvolutionWebhookNow,
   updateWhatsappFilterSettings,
@@ -36,6 +40,7 @@ interface WhatsappFilterSettingsProps {
   initialData: WhatsappFilteringData;
   webhookUrl: string;
   isGatewayConfigured: boolean;
+  pipelines?: WhatsappPipelineOption[];
 }
 
 const SOURCE_BADGES: Record<string, { label: string; cls: string }> = {
@@ -50,6 +55,7 @@ export function WhatsappFilterSettings({
   initialData,
   webhookUrl,
   isGatewayConfigured,
+  pipelines = [],
 }: WhatsappFilterSettingsProps) {
   const formHeadingId = useId();
   const chatModalTitleId = useId();
@@ -82,13 +88,31 @@ export function WhatsappFilterSettings({
 
   const [feedback, setFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
-  // Modal state for existing WhatsApp chats sync (Вариант 2)
+  // Modal state for existing WhatsApp chats sync (Вариант 2 + Импорт лидов)
   const chatDialogRef = useRef<HTMLDialogElement | null>(null);
   const [syncedChats, setSyncedChats] = useState<EvolutionSyncedChatItem[]>([]);
   const [selectedJids, setSelectedJids] = useState<Set<string>>(new Set());
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [chatsError, setChatsError] = useState<string | null>(null);
   const [isAddingSelectedChats, setIsAddingSelectedChats] = useState(false);
+
+  const defaultImportPipeline =
+    pipelines.find((p) => p.name.trim().toLowerCase().includes("холодный автообзвон")) ||
+    pipelines[0];
+  const defaultImportStage =
+    defaultImportPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("неразобран")) ||
+    defaultImportPipeline?.stages[0];
+
+  const [chatModalMode, setChatModalMode] = useState<"STOP_LIST" | "IMPORT_LEADS">("STOP_LIST");
+  const [chatFilterTab, setChatFilterTab] = useState<string>("ALL");
+  const [targetPipelineId, setTargetPipelineId] = useState<string>(
+    defaultImportPipeline?.id || ""
+  );
+  const [targetStageId, setTargetStageId] = useState<string>(defaultImportStage?.id || "");
+  const [dealCreationRule, setDealCreationRule] = useState<"LEAD_LABEL_ONLY" | "ALL_SELECTED">(
+    "LEAD_LABEL_ONLY"
+  );
+  const [isImportingLeads, setIsImportingLeads] = useState(false);
 
   // Progressive fallback for closedby="any" (Safari light-dismiss)
   useEffect(() => {
@@ -213,7 +237,47 @@ export function WhatsappFilterSettings({
     setChatsError(res.chatsError || null);
     setSelectedJids(new Set());
     setChatSearchQuery("");
+    setChatFilterTab("ALL");
+    if (!targetPipelineId && defaultImportPipeline) {
+      setTargetPipelineId(defaultImportPipeline.id);
+      setTargetStageId(defaultImportStage?.id || "");
+    }
     chatDialogRef.current?.showModal();
+  };
+
+  const hasLeadLabel = (chat: EvolutionSyncedChatItem) =>
+    chat.labels.some((label) => label.trim().toLowerCase() === "лид");
+
+  const chatLabelsInList = Array.from(
+    new Set(
+      syncedChats
+        .flatMap((c) => c.labels)
+        .map((l) => l.trim())
+        .filter((l) => Boolean(l) && l.toLowerCase() !== "лид")
+    )
+  );
+
+  const selectedImportPipeline =
+    pipelines.find((p) => p.id === targetPipelineId) || defaultImportPipeline;
+
+  const handleTargetPipelineChange = (newPipelineId: string) => {
+    setTargetPipelineId(newPipelineId);
+    const nextPipeline = pipelines.find((p) => p.id === newPipelineId);
+    const preferredStage =
+      nextPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("неразобран")) ||
+      nextPipeline?.stages[0];
+    setTargetStageId(preferredStage?.id || "");
+  };
+
+  const handleSwitchChatModalMode = (nextMode: "STOP_LIST" | "IMPORT_LEADS") => {
+    setChatModalMode(nextMode);
+    setSelectedJids(new Set());
+    setChatsError(null);
+    if (nextMode === "IMPORT_LEADS") {
+      setChatFilterTab("NOT_IGNORED");
+    } else {
+      setChatFilterTab("ALL");
+    }
   };
 
   const handleToggleChatSelection = (jid: string) => {
@@ -226,13 +290,28 @@ export function WhatsappFilterSettings({
   };
 
   const filteredModalChats = syncedChats.filter((chat) => {
+    if (chatFilterTab === "NOT_IGNORED" && chat.isAlreadyIgnored) return false;
+    if (chatFilterTab === "LEAD_LABEL" && (!hasLeadLabel(chat) || chat.isAlreadyIgnored)) {
+      return false;
+    }
+    if (
+      chatFilterTab !== "ALL" &&
+      chatFilterTab !== "NOT_IGNORED" &&
+      chatFilterTab !== "LEAD_LABEL"
+    ) {
+      if (!chat.labels.some((l) => l.trim().toLowerCase() === chatFilterTab.toLowerCase())) {
+        return false;
+      }
+    }
+
     const q = chatSearchQuery.trim().toLowerCase();
     if (!q) return true;
     return (
       chat.displayName.toLowerCase().includes(q) ||
       chat.phone.toLowerCase().includes(q) ||
       (chat.lastMessageText || "").toLowerCase().includes(q) ||
-      (chat.existingContactName || "").toLowerCase().includes(q)
+      (chat.existingContactName || "").toLowerCase().includes(q) ||
+      chat.labels.some((l) => l.toLowerCase().includes(q))
     );
   });
 
@@ -246,6 +325,28 @@ export function WhatsappFilterSettings({
       setSelectedJids(new Set());
     } else {
       setSelectedJids(new Set(selectable));
+    }
+  };
+
+  const handleSelectLeadLabelChatsInModal = () => {
+    const selectable = syncedChats
+      .filter((c) => !c.isAlreadyIgnored && hasLeadLabel(c))
+      .map((c) => c.jid);
+    if (selectable.length === 0) return;
+
+    const allSelected = selectable.every((j) => selectedJids.has(j));
+    if (allSelected) {
+      setSelectedJids((prev) => {
+        const next = new Set(prev);
+        for (const j of selectable) next.delete(j);
+        return next;
+      });
+    } else {
+      setSelectedJids((prev) => {
+        const next = new Set(prev);
+        for (const j of selectable) next.add(j);
+        return next;
+      });
     }
   };
 
@@ -283,6 +384,51 @@ export function WhatsappFilterSettings({
       });
     } else {
       setChatsError(res.error || "Не удалось добавить выбранные чаты");
+    }
+  };
+
+  const handleImportSelectedChatsToCrm = async () => {
+    const chosen = syncedChats.filter((c) => selectedJids.has(c.jid) && !c.isAlreadyIgnored);
+    if (chosen.length === 0) return;
+
+    setIsImportingLeads(true);
+    setChatsError(null);
+
+    const res = await importWhatsappLeadChatsToCrm({
+      instanceId,
+      chats: chosen.map((c) => ({
+        jid: c.jid,
+        phone: c.phone || c.jid,
+        displayName: c.displayName,
+        lastMessageText: c.lastMessageText,
+        lastMessageAt: c.lastMessageAt,
+        labels: c.labels,
+      })),
+      targetPipelineId: targetPipelineId || undefined,
+      targetStageId: targetStageId || undefined,
+      dealCreationRule,
+      leadLabelName: "Лид",
+    });
+
+    setIsImportingLeads(false);
+
+    if (res.success) {
+      const chosenKeys = new Set(chosen.map((c) => c.phoneKey));
+      setSyncedChats((prev) =>
+        prev.map((c) =>
+          chosenKeys.has(c.phoneKey) && !c.existingContactName
+            ? { ...c, existingContactName: c.displayName }
+            : c
+        )
+      );
+      setSelectedJids(new Set());
+      chatDialogRef.current?.close();
+      setFeedback({
+        type: "ok",
+        text: `Импорт завершён: новых контактов ${res.createdContactsCount ?? 0} (уже были в CRM: ${res.existingContactsCount ?? 0}), создано сделок ${res.createdDealsCount ?? 0} в воронку «${res.targetPipelineName || "Холодный автообзвон"}» → «${res.targetStageName || "Неразобранные"}».`,
+      });
+    } else {
+      setChatsError(res.error || "Не удалось импортировать выбранные чаты в CRM");
     }
   };
 
@@ -699,20 +845,22 @@ export function WhatsappFilterSettings({
         </div>
       </div>
 
-      {/* Native <dialog> Modal for Importing Existing WhatsApp Chats (Вариант 2) */}
+      {/* Native <dialog> Modal for Importing Existing WhatsApp Chats (Стоп-лист + Импорт лидов) */}
       <dialog
         ref={chatDialogRef}
         aria-labelledby={chatModalTitleId}
         {...({ closedby: "any" } as Record<string, string>)}
-        className="rounded-2xl max-w-2xl w-[calc(100%-2rem)] p-0 shadow-2xl border border-slate-200 bg-white m-auto overflow-hidden"
+        className="rounded-2xl max-w-3xl w-[calc(100%-2rem)] p-0 shadow-2xl border border-slate-200 bg-white m-auto overflow-hidden"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <div>
             <h3 id={chatModalTitleId} className="text-sm font-bold text-slate-900">
-              Текущие личные диалоги в WhatsApp ({syncedChats.length})
+              Личные диалоги в WhatsApp ({syncedChats.length})
             </h3>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Отметьте переписки с текущими клиентами или коллегами, чтобы CRM не создавала по ним лиды
+              {chatModalMode === "STOP_LIST"
+                ? "Отметьте переписки с текущими клиентами или коллегами, чтобы CRM не создавала по ним лиды"
+                : "Загрузите чаты с лидами в Контакты и чаты CRM. Для чатов с ярлыком «Лид» (или всех выбранных) создадутся сделки."}
             </p>
           </div>
           <button
@@ -725,6 +873,34 @@ export function WhatsappFilterSettings({
           </button>
         </div>
 
+        {/* Mode Switcher Tabs */}
+        <div className="px-5 pt-3 pb-2 bg-slate-50/70 border-b border-slate-100 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleSwitchChatModalMode("STOP_LIST")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+              chatModalMode === "STOP_LIST"
+                ? "bg-slate-900 text-white shadow-xs"
+                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            <ShieldBan className="w-3.5 h-3.5" />
+            В стоп-лист (рабочие чаты)
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSwitchChatModalMode("IMPORT_LEADS")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+              chatModalMode === "IMPORT_LEADS"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            Импорт лидов в CRM
+          </button>
+        </div>
+
         <div className="p-5 space-y-3">
           {chatsError && (
             <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center gap-2">
@@ -732,6 +908,124 @@ export function WhatsappFilterSettings({
               <span>Шлюз вернул предупреждение: {chatsError}</span>
             </div>
           )}
+
+          {chatModalMode === "IMPORT_LEADS" && (
+            <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Воронка для новых лидов
+                  </label>
+                  <select
+                    value={targetPipelineId}
+                    onChange={(e) => handleTargetPipelineChange(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  >
+                    {pipelines.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Начальный этап воронки
+                  </label>
+                  <select
+                    value={targetStageId}
+                    onChange={(e) => setTargetStageId(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  >
+                    {(selectedImportPipeline?.stages || []).map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-[11px]">
+                <span className="font-semibold text-slate-700 shrink-0 flex items-center gap-1">
+                  <Briefcase className="w-3.5 h-3.5 text-emerald-700" />
+                  Правило сделок:
+                </span>
+                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700">
+                  <input
+                    type="radio"
+                    name="dealCreationRule"
+                    checked={dealCreationRule === "LEAD_LABEL_ONLY"}
+                    onChange={() => setDealCreationRule("LEAD_LABEL_ONLY")}
+                    className="accent-emerald-600"
+                  />
+                  Сделки только с ярлыком «Лид» (остальные — только в Контакты)
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700">
+                  <input
+                    type="radio"
+                    name="dealCreationRule"
+                    checked={dealCreationRule === "ALL_SELECTED"}
+                    onChange={() => setDealCreationRule("ALL_SELECTED")}
+                    className="accent-emerald-600"
+                  />
+                  Сделки для всех выбранных
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Filter pills by stop-list & WhatsApp labels */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setChatFilterTab("ALL")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                chatFilterTab === "ALL"
+                  ? "bg-slate-800 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              Все ({syncedChats.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatFilterTab("NOT_IGNORED")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                chatFilterTab === "NOT_IGNORED"
+                  ? "bg-slate-800 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              Не в стоп-листе ({syncedChats.filter((c) => !c.isAlreadyIgnored).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatFilterTab("LEAD_LABEL")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                chatFilterTab === "LEAD_LABEL"
+                  ? "bg-violet-600 text-white"
+                  : "bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100"
+              }`}
+            >
+              Ярлык «Лид» (
+              {syncedChats.filter((c) => !c.isAlreadyIgnored && hasLeadLabel(c)).length})
+            </button>
+            {chatLabelsInList.slice(0, 6).map((lbl) => (
+              <button
+                key={lbl}
+                type="button"
+                onClick={() => setChatFilterTab(lbl)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium cursor-pointer ${
+                  chatFilterTab === lbl
+                    ? "bg-slate-800 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <search className="flex-1">
@@ -746,22 +1040,34 @@ export function WhatsappFilterSettings({
                   type="search"
                   value={chatSearchQuery}
                   onChange={(e) => setChatSearchQuery(e.target.value)}
-                  placeholder="Найти чат по имени, номеру или тексту сообщения..."
+                  placeholder="Найти чат по имени, номеру, ярлыку или тексту..."
                   className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 />
               </div>
             </search>
 
-            <button
-              type="button"
-              onClick={handleSelectAllNotIgnoredInModal}
-              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
-            >
-              Выбрать / снять все новые
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {chatModalMode === "IMPORT_LEADS" &&
+                syncedChats.some((c) => !c.isAlreadyIgnored && hasLeadLabel(c)) && (
+                  <button
+                    type="button"
+                    onClick={handleSelectLeadLabelChatsInModal}
+                    className="px-3 py-2 bg-violet-50 hover:bg-violet-100 text-violet-800 border border-violet-200 rounded-xl text-xs font-semibold cursor-pointer"
+                  >
+                    Выбрать все «Лид»
+                  </button>
+                )}
+              <button
+                type="button"
+                onClick={handleSelectAllNotIgnoredInModal}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Выбрать / снять все
+              </button>
+            </div>
           </div>
 
-          <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+          <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
             {filteredModalChats.length === 0 ? (
               <div className="p-6 text-center text-xs text-slate-400">
                 Личные диалоги не найдены (убедитесь, что WhatsApp подключен и история синхронизирована).
@@ -788,11 +1094,23 @@ export function WhatsappFilterSettings({
                       className="mt-1 accent-emerald-600 rounded"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-bold text-slate-900 truncate">
                           {chat.displayName}
                         </span>
                         <span className="font-mono text-[11px] text-slate-500">{chat.phone}</span>
+                        {chat.labels.map((lbl) => (
+                          <span
+                            key={lbl}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                              lbl.trim().toLowerCase() === "лид"
+                                ? "bg-violet-100 text-violet-800"
+                                : "bg-slate-100 text-slate-700"
+                            }`}
+                          >
+                            {lbl}
+                          </span>
+                        ))}
                         {chat.isAlreadyIgnored && (
                           <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[10px] font-semibold">
                             Уже в стоп-листе
@@ -829,16 +1147,29 @@ export function WhatsappFilterSettings({
             >
               Отмена
             </button>
-            <button
-              type="button"
-              onClick={handleImportSelectedChatsToIgnore}
-              disabled={selectedJids.size === 0 || isAddingSelectedChats}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
-            >
-              {isAddingSelectedChats
-                ? "Добавляем..."
-                : `Добавить в рабочие (${selectedJids.size})`}
-            </button>
+            {chatModalMode === "STOP_LIST" ? (
+              <button
+                type="button"
+                onClick={handleImportSelectedChatsToIgnore}
+                disabled={selectedJids.size === 0 || isAddingSelectedChats}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+              >
+                {isAddingSelectedChats
+                  ? "Добавляем..."
+                  : `Добавить в рабочие (${selectedJids.size})`}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleImportSelectedChatsToCrm}
+                disabled={selectedJids.size === 0 || isImportingLeads}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+              >
+                {isImportingLeads
+                  ? "Импортируем..."
+                  : `Импортировать в CRM (${selectedJids.size})`}
+              </button>
+            )}
           </div>
         </div>
       </dialog>

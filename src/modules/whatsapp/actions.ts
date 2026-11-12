@@ -3,7 +3,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { WhatsappMessageType, WhatsappStatus, StageType, Prisma } from "@prisma/client";
+import { Currency, WhatsappMessageType, WhatsappStatus, StageType, Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import {
   ChatConversation,
@@ -1192,6 +1192,13 @@ export async function fetchWhatsappChatsAndLabelsFromGateway(instanceId: string)
       prisma.contact.findMany({ select: { id: true, name: true, phone: true } }),
     ]);
 
+    const cachedLabels = parseCachedLabelsJson(instance.cachedLabels);
+    const effectiveLabels = labelsRes.ok && labelsRes.labels.length > 0 ? labelsRes.labels : cachedLabels;
+    const labelNameById = new Map<string, string>();
+    for (const lbl of effectiveLabels) {
+      labelNameById.set(lbl.id, lbl.name);
+    }
+
     if (labelsRes.ok) {
       await prisma.whatsappInstance.update({
         where: { id: instance.id },
@@ -1218,6 +1225,9 @@ export async function fetchWhatsappChatsAndLabelsFromGateway(instanceId: string)
           (parsed.last10 ? contactByKey.get(parsed.last10) : undefined) ||
           null
         : null;
+      const resolvedLabels = Array.from(
+        new Set(chat.labels.map((l) => labelNameById.get(l) || l).filter(Boolean))
+      );
 
       return {
         jid: chat.jid,
@@ -1227,7 +1237,7 @@ export async function fetchWhatsappChatsAndLabelsFromGateway(instanceId: string)
         lastMessageText: chat.lastMessageText,
         lastMessageAt: chat.lastMessageAt,
         archived: chat.archived,
-        labels: chat.labels,
+        labels: resolvedLabels,
         isAlreadyIgnored,
         existingContactName,
       };
@@ -1299,6 +1309,227 @@ export async function markConversationAsWorkChat(params: {
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка переноса в рабочие чаты";
+    return { success: false, error: message };
+  }
+}
+
+// 18. Импорт текущих чатов WhatsApp в Контакты и Сделки (включая автосоздание по ярлыку «Лид»)
+export async function importWhatsappLeadChatsToCrm(params: {
+  instanceId: string;
+  chats: Array<{
+    jid: string;
+    phone: string;
+    displayName: string;
+    lastMessageText?: string | null;
+    lastMessageAt?: string | null;
+    labels: string[];
+  }>;
+  targetPipelineId?: string;
+  targetStageId?: string;
+  dealCreationRule: "LEAD_LABEL_ONLY" | "ALL_SELECTED";
+  leadLabelName?: string;
+}) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false, error: "Импорт чатов в CRM доступен только Администратору" };
+    }
+
+    if (!Array.isArray(params.chats) || params.chats.length === 0) {
+      return { success: false, error: "Выберите хотя бы один чат для импорта" };
+    }
+
+    const pipelines = await prisma.pipeline.findMany({
+      include: {
+        stages: { orderBy: { order: "asc" } },
+      },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+    });
+
+    const targetPipeline =
+      (params.targetPipelineId && pipelines.find((p) => p.id === params.targetPipelineId)) ||
+      pipelines.find((p) => p.name.toLowerCase().includes("холодный автообзвон")) ||
+      pipelines.find((p) => p.isDefault) ||
+      pipelines[0];
+
+    if (!targetPipeline || targetPipeline.stages.length === 0) {
+      return { success: false, error: "В CRM не найдена воронка с этапами для создания сделок" };
+    }
+
+    const targetStage =
+      (params.targetStageId && targetPipeline.stages.find((s) => s.id === params.targetStageId)) ||
+      targetPipeline.stages.find((s) => s.name.toLowerCase().includes("неразобран")) ||
+      targetPipeline.stages.find((s) => s.type === StageType.OPEN) ||
+      targetPipeline.stages[0];
+
+    const targetLeadLabelLower = (params.leadLabelName || "Лид").trim().toLowerCase();
+
+    const [ignoredSets, existingContacts, existingMessagesContacts] = await Promise.all([
+      loadIgnoredPhoneKeySets(),
+      prisma.contact.findMany({
+        include: {
+          deals: {
+            select: { id: true, pipelineId: true },
+          },
+        },
+      }),
+      prisma.whatsappMessage.findMany({
+        where: { contactId: { not: null } },
+        distinct: ["contactId"],
+        select: { contactId: true },
+      }),
+    ]);
+
+    const contactByKey = new Map<
+      string,
+      { id: string; name: string; dealPipelineIds: Set<string> }
+    >();
+    for (const c of existingContacts) {
+      const entry = {
+        id: c.id,
+        name: c.name,
+        dealPipelineIds: new Set(c.deals.map((d) => d.pipelineId)),
+      };
+      const parsed = extractPhoneKeyAndRaw(c.phone);
+      if (parsed) {
+        contactByKey.set(parsed.phoneKey, entry);
+        if (parsed.last10) contactByKey.set(parsed.last10, entry);
+      }
+      contactByKey.set(c.phone, entry);
+    }
+
+    const contactsWithMessages = new Set(
+      existingMessagesContacts.map((m) => m.contactId).filter((id): id is string => Boolean(id))
+    );
+
+    let createdContactsCount = 0;
+    let existingContactsCount = 0;
+    let createdDealsCount = 0;
+    let skippedIgnoredCount = 0;
+    let skippedExistingDealsCount = 0;
+
+    for (const chat of params.chats) {
+      const isIgnored =
+        matchesIgnoredKeySets(chat.phone, ignoredSets) ||
+        matchesIgnoredKeySets(chat.jid, ignoredSets);
+      if (isIgnored) {
+        skippedIgnoredCount++;
+        continue;
+      }
+
+      const parsed = extractPhoneKeyAndRaw(chat.phone, chat.jid);
+      const displayPhone = parsed
+        ? parsed.isLid
+          ? chat.phone || chat.jid
+          : parsed.phoneKey.length >= 10
+          ? `+${parsed.phoneKey}`
+          : chat.phone || parsed.phoneKey
+        : chat.phone || chat.jid;
+
+      if (!displayPhone) continue;
+
+      const cleanName =
+        chat.displayName && chat.displayName.trim() ? chat.displayName.trim() : displayPhone;
+
+      let contactEntry =
+        (parsed && contactByKey.get(parsed.phoneKey)) ||
+        (parsed?.last10 ? contactByKey.get(parsed.last10) : undefined) ||
+        contactByKey.get(displayPhone);
+
+      if (!contactEntry) {
+        const createdContact = await prisma.contact.create({
+          data: {
+            name: cleanName,
+            phone: displayPhone,
+            assignedToId: user.id,
+          },
+        });
+        contactEntry = {
+          id: createdContact.id,
+          name: createdContact.name,
+          dealPipelineIds: new Set<string>(),
+        };
+        if (parsed) {
+          contactByKey.set(parsed.phoneKey, contactEntry);
+          if (parsed.last10) contactByKey.set(parsed.last10, contactEntry);
+        }
+        contactByKey.set(displayPhone, contactEntry);
+        createdContactsCount++;
+      } else {
+        existingContactsCount++;
+      }
+
+      const hasLeadLabel = chat.labels.some(
+        (l) => l.trim().toLowerCase() === targetLeadLabelLower
+      );
+      const shouldCreateDeal = params.dealCreationRule === "ALL_SELECTED" || hasLeadLabel;
+
+      let createdDealId: string | null = null;
+      if (shouldCreateDeal) {
+        if (contactEntry.dealPipelineIds.has(targetPipeline.id)) {
+          skippedExistingDealsCount++;
+        } else {
+          const deal = await prisma.deal.create({
+            data: {
+              title: hasLeadLabel
+                ? `Лид (WhatsApp): ${cleanName}`
+                : `Чат WhatsApp: ${cleanName}`,
+              contactId: contactEntry.id,
+              pipelineId: targetPipeline.id,
+              stageId: targetStage.id,
+              totalBudget: 0,
+              currency: Currency.KZT,
+              exchangeRateAtCreation: 1.0,
+              assignedToId: user.id,
+            },
+          });
+          contactEntry.dealPipelineIds.add(targetPipeline.id);
+          createdDealId = deal.id;
+          createdDealsCount++;
+        }
+      }
+
+      if (!contactsWithMessages.has(contactEntry.id)) {
+        const msgTime =
+          chat.lastMessageAt && !Number.isNaN(new Date(chat.lastMessageAt).getTime())
+            ? new Date(chat.lastMessageAt)
+            : new Date();
+        await prisma.whatsappMessage.create({
+          data: {
+            instanceId: params.instanceId,
+            contactId: contactEntry.id,
+            dealId: createdDealId,
+            remoteJid: displayPhone.replace(/^\+/, ""),
+            fromMe: false,
+            senderName: cleanName,
+            messageType: WhatsappMessageType.TEXT,
+            textContent:
+              chat.lastMessageText?.trim() || "Контакт импортирован из WhatsApp",
+            timestamp: msgTime,
+          },
+        });
+        contactsWithMessages.add(contactEntry.id);
+      }
+    }
+
+    revalidatePath("/settings/whatsapp");
+    revalidatePath("/contacts");
+    revalidatePath("/deals");
+    revalidatePath("/whatsapp");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      createdContactsCount,
+      existingContactsCount,
+      createdDealsCount,
+      skippedIgnoredCount,
+      skippedExistingDealsCount,
+      targetPipelineName: targetPipeline.name,
+      targetStageName: targetStage.name,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка импорта лидов из WhatsApp";
     return { success: false, error: message };
   }
 }

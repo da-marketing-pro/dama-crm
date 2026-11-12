@@ -239,7 +239,9 @@ export function DealsView({
       {activePipeline && (
         <DealsKanban
           stages={activePipeline.stages}
+          pipelines={pipelines.map((p) => ({ id: p.id, name: p.name }))}
           onSelectDeal={(deal) => setSelectedDeal(deal)}
+          onPipelineMoved={() => router.refresh()}
           currencyRateUsd={currencyRateUsd}
           currencyRateRub={currencyRateRub}
         />
@@ -270,20 +272,31 @@ export function DealsView({
       )}
 
       {/* Slide-out Deal Drawer */}
-      <DealDrawer
-        deal={selectedDeal}
-        isOpen={!!selectedDeal}
-        onClose={() => setSelectedDeal(null)}
-        isAdmin={isAdmin}
-        currentUserId={currentUserId}
-        users={users}
-        pipelines={pipelines}
-        onDealDeleted={() => {
-          setSelectedDeal(null);
-          router.refresh();
-        }}
-        onDealUpdated={() => router.refresh()}
-      />
+      {(() => {
+        const syncedDeal = selectedDeal
+          ? pipelines
+              .flatMap((p) => p.stages)
+              .flatMap((s) => s.deals)
+              .find((d) => d.id === selectedDeal.id) || null
+          : null;
+        return (
+          <DealDrawer
+            key={syncedDeal?.id || "closed"}
+            deal={syncedDeal}
+            isOpen={!!syncedDeal}
+            onClose={() => setSelectedDeal(null)}
+            isAdmin={isAdmin}
+            currentUserId={currentUserId}
+            users={users}
+            pipelines={pipelines}
+            onDealDeleted={() => {
+              setSelectedDeal(null);
+              router.refresh();
+            }}
+            onDealUpdated={() => router.refresh()}
+          />
+        );
+      })()}
     </div>
   );
 }

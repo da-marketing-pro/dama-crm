@@ -6,7 +6,11 @@ import { ContactsView } from "@/modules/contacts/components/ContactsView";
 import { ContactDetail, CustomFieldDef } from "@/modules/contacts/types";
 import { Role } from "@prisma/client";
 
-export default async function ContactsPage() {
+export default async function ContactsPage({
+  searchParams,
+}: {
+  searchParams?: { contactId?: string };
+}) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     redirect("/login");
@@ -157,6 +161,7 @@ export default async function ContactsPage() {
       users={users}
       customFieldDefs={parsedFieldDefs}
       pipelines={pipelines}
+      initialSelectedContactId={searchParams?.contactId}
     />
   );
 }
