@@ -1740,11 +1740,15 @@ export async function simulateCalloWebhookTest(params: {
         ct_duration: "18.5",
         ...(params.name?.trim() ? { ct_name: params.name.trim() } : {}),
       },
-      { instanceId: params.instanceId, isTest: true }
+      { instanceId: params.instanceId, isTest: true, method: "TEST" }
     );
 
     if (!res.success) {
       return { success: false, error: res.error };
+    }
+
+    if ("ping" in res && res.ping) {
+      return { success: false, error: "Укажите корректный номер телефона для теста" };
     }
 
     return {
@@ -1758,5 +1762,30 @@ export async function simulateCalloWebhookTest(params: {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка теста вебхука Callo";
     return { success: false, error: message };
+  }
+}
+
+// 22. Получить последний сигнал вебхука Callo.com (только ADMIN)
+export async function getCalloWebhookStatus(instanceId: string) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== "ADMIN") {
+      return { success: false as const, error: "Доступно только администратору" };
+    }
+
+    const row = await prisma.whatsappInstance.findUnique({
+      where: { id: instanceId },
+      select: { lastCalloWebhook: true },
+    });
+
+    return {
+      success: true as const,
+      lastCalloWebhook: (row?.lastCalloWebhook ?? null) as
+        | import("@/lib/calloWebhook").CalloLastWebhookDebug
+        | null,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка загрузки статуса Callo";
+    return { success: false as const, error: message };
   }
 }

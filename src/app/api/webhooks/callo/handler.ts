@@ -3,6 +3,8 @@ import {
   extractCalloParamsFromRequest,
   getDefaultWhatsappInstanceForCallo,
   processCalloLeadWebhook,
+  saveLastCalloWebhookDebug,
+  summarizeCalloParams,
   verifyCalloWebhookToken,
 } from "@/lib/calloWebhook";
 
@@ -27,6 +29,14 @@ export async function handleCalloWebhookRequest(
       "";
 
     if (!verifyCalloWebhookToken(providedToken, instance.id)) {
+      await saveLastCalloWebhookDebug(instance.id, {
+        receivedAt: new Date().toISOString(),
+        phone: "—",
+        method: req.method,
+        outcome: "error",
+        note: "401: неверный или отсутствующий токен вебхука",
+        rawSummary: summarizeCalloParams(params),
+      });
       return NextResponse.json(
         { success: false, error: "Неверный или отсутствующий токен вебхука" },
         { status: 401 }
@@ -35,6 +45,7 @@ export async function handleCalloWebhookRequest(
 
     const result = await processCalloLeadWebhook(params, {
       instanceId: instance.id,
+      method: req.method,
     });
 
     return NextResponse.json(result, { status: result.statusCode });

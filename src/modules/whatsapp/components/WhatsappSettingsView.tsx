@@ -33,6 +33,7 @@ import {
   processIncomingWhatsappWebhook,
   updateWhatsappQuickTemplates,
   simulateCalloWebhookTest,
+  getCalloWebhookStatus,
 } from "../actions";
 import {
   WhatsappFilteringData,
@@ -102,6 +103,7 @@ export function WhatsappSettingsView({
   const [clientOrigin, setClientOrigin] = useState("https://crm.da-marketing.pro");
   const [calloTestPhone, setCalloTestPhone] = useState("+77015554433");
   const [isTestingCallo, setIsTestingCallo] = useState(false);
+  const [isRefreshingCalloStatus, setIsRefreshingCalloStatus] = useState(false);
   const [calloTestResult, setCalloTestResult] = useState<{
     success: boolean;
     phone?: string;
@@ -912,17 +914,85 @@ export function WhatsappSettingsView({
               </div>
 
               {/* Last Callo Webhook Telemetry */}
-              {instance.lastCalloWebhook && (
-                <div className="p-3 rounded-xl bg-orange-50/70 border border-orange-200 text-xs space-y-1">
-                  <div className="font-bold text-orange-900">
-                    Последний сигнал от Callo.com: {instance.lastCalloWebhook.phone}
+              <div className="p-3.5 rounded-xl bg-orange-50/60 border border-orange-200/80 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-bold text-orange-950">
+                    Последний сигнал от Callo.com
                   </div>
-                  <div className="text-[11px] text-orange-800">
-                    {instance.lastCalloWebhook.note || instance.lastCalloWebhook.outcome} •{" "}
-                    {new Date(instance.lastCalloWebhook.receivedAt).toLocaleString("ru-RU")}
-                  </div>
+                  <button
+                    type="button"
+                    disabled={isRefreshingCalloStatus}
+                    onClick={async () => {
+                      setIsRefreshingCalloStatus(true);
+                      const statusRes = await getCalloWebhookStatus(instance.id);
+                      setIsRefreshingCalloStatus(false);
+                      if (statusRes.success) {
+                        setInstance((prev) => ({
+                          ...prev,
+                          lastCalloWebhook: statusRes.lastCalloWebhook,
+                        }));
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-orange-200 hover:bg-orange-100/60 text-orange-900 text-[11px] font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isRefreshingCalloStatus ? "animate-spin" : ""}`} />
+                    <span>Обновить статус</span>
+                  </button>
                 </div>
-              )}
+
+                {instance.lastCalloWebhook ? (
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          instance.lastCalloWebhook.outcome === "processed"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : instance.lastCalloWebhook.outcome === "error"
+                            ? "bg-rose-100 text-rose-800"
+                            : instance.lastCalloWebhook.outcome === "deduplicated"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-slate-200 text-slate-700"
+                        }`}
+                      >
+                        {instance.lastCalloWebhook.outcome === "processed"
+                          ? "Принят"
+                          : instance.lastCalloWebhook.outcome === "error"
+                          ? "Ошибка"
+                          : instance.lastCalloWebhook.outcome === "deduplicated"
+                          ? "Повтор"
+                          : "Пинг / Пропуск"}
+                      </span>
+                      {instance.lastCalloWebhook.method && (
+                        <span className="px-1.5 py-0.5 rounded bg-white border border-orange-200 text-[10px] font-mono text-slate-700">
+                          {instance.lastCalloWebhook.method}
+                        </span>
+                      )}
+                      <span className="font-semibold text-orange-950">
+                        {instance.lastCalloWebhook.phone}
+                      </span>
+                      <span className="text-[11px] text-orange-800/80 ml-auto">
+                        {new Date(instance.lastCalloWebhook.receivedAt).toLocaleString("ru-RU")}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-orange-900">
+                      {instance.lastCalloWebhook.note || instance.lastCalloWebhook.outcome}
+                    </div>
+                    {instance.lastCalloWebhook.rawSummary && (
+                      <div className="p-2 rounded-lg bg-white/80 border border-orange-200/70 font-mono text-[10px] text-slate-700 break-all">
+                        {instance.lastCalloWebhook.rawSummary}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-orange-900/90 leading-relaxed">
+                    Сигналов от Callo пока не поступало. Проверьте в настройках кампании Callo: в
+                    «Сценарии» вместо или помимо e-mail должна быть выбрана реакция{' '}
+                    <strong>«Отправить вебхук»</strong>, затем нажаты <strong>«Применить»</strong> и{' '}
+                    <strong>«Сохранить»</strong> кампанию. Для проверки нажмите в Callo{' '}
+                    <strong>«Отладка вебхуков: Посмотреть результат»</strong>.
+                  </p>
+                )}
+              </div>
 
               {/* 1-click Callo Test */}
               <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
@@ -948,6 +1018,13 @@ export function WhatsappSettingsView({
                         phone: calloTestPhone,
                         buttonNum: "1",
                       });
+                      const statusRes = await getCalloWebhookStatus(instance.id);
+                      if (statusRes.success) {
+                        setInstance((prev) => ({
+                          ...prev,
+                          lastCalloWebhook: statusRes.lastCalloWebhook,
+                        }));
+                      }
                       setIsTestingCallo(false);
                       setCalloTestResult(res);
                     }}

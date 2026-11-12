@@ -6,6 +6,7 @@ import { extractPhoneKeyAndRaw } from "@/lib/whatsappFilterUtils";
 export interface CalloLastWebhookDebug {
   receivedAt: string;
   phone: string;
+  method?: string;
   callId?: string;
   campaignId?: string;
   buttonNum?: string;
@@ -17,6 +18,7 @@ export interface CalloLastWebhookDebug {
   stageName?: string;
   isNewContact?: boolean;
   note?: string;
+  rawSummary?: string;
 }
 
 function getCalloSecretBase(): string {
@@ -76,23 +78,100 @@ function pickParam(params: Record<string, string>, keys: string[]): string {
   return "";
 }
 
+export function summarizeCalloParams(params: Record<string, string>): string {
+  const safeEntries = Object.entries(params)
+    .filter(([k, v]) => {
+      const lower = k.toLowerCase();
+      if (
+        lower.includes("token") ||
+        lower.includes("secret") ||
+        lower.includes("password") ||
+        lower === "auth"
+      ) {
+        return false;
+      }
+      return typeof v === "string" && v.trim().length > 0;
+    })
+    .map(([k, v]) => `${k}=${v.trim()}`);
+
+  if (safeEntries.length === 0) return "(пустой запрос без параметров)";
+  const joined = safeEntries.join(", ");
+  return joined.length > 360 ? `${joined.slice(0, 357)}...` : joined;
+}
+
+function flattenJsonIntoParams(
+  input: unknown,
+  out: Record<string, string>,
+  prefix = "",
+  depth = 0
+) {
+  if (depth > 4 || input === null || input === undefined) return;
+
+  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") {
+    const val = String(input).trim();
+    if (!val || !prefix) return;
+    out[prefix] = val;
+    const leaf = prefix.split(".").pop();
+    if (leaf && !out[leaf]) {
+      out[leaf] = val;
+    }
+    return;
+  }
+
+  if (Array.isArray(input)) {
+    if (input.length > 0) {
+      flattenJsonIntoParams(input[0], out, prefix, depth + 1);
+    }
+    return;
+  }
+
+  if (typeof input === "object") {
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      if (v === null || v === undefined) continue;
+      const nextKey = prefix ? `${prefix}.${k}` : k;
+      flattenJsonIntoParams(v, out, nextKey, depth + 1);
+    }
+  }
+}
+
 function normalizeCalloPhoneInput(params: Record<string, string>): string {
   const direct = pickParam(params, [
     "ct_phone",
-    "phone",
+    "ct_phone8",
+    "callerphone",
+    "caller_phone",
     "client_phone",
+    "phone",
     "caller",
     "ct_caller",
+    "abonent",
+    "subscriber",
+    "src",
+    "to",
+    "msisdn",
     "tel",
     "number",
   ]);
   if (direct) return direct;
 
   const phone9 = pickParam(params, ["ct_phone9", "phone9"]).replace(/[^\d]/g, "");
-  if (!phone9) return "";
-  if (phone9.length === 10) return `+7${phone9}`;
-  if (phone9.length === 9) return `+7${phone9}`;
-  return phone9;
+  if (phone9) {
+    if (phone9.length === 10 || phone9.length === 9) return `+7${phone9}`;
+    return phone9;
+  }
+
+  // Fallback эвристика по ключам, содержащим phone/tel/caller/abonent/msisdn
+  for (const [key, val] of Object.entries(params)) {
+    if (!/phone|tel|caller|abonent|msisdn/i.test(key)) continue;
+    const trimmed = val?.trim();
+    if (!trimmed) continue;
+    const parsed = extractPhoneKeyAndRaw(trimmed);
+    if (parsed && !parsed.isLid && parsed.phoneKey.length >= 7) {
+      return trimmed;
+    }
+  }
+
+  return "";
 }
 
 export async function extractCalloParamsFromRequest(
@@ -118,13 +197,7 @@ export async function extractCalloParamsFromRequest(
   try {
     if (contentType.includes("application/json")) {
       const json = await req.json();
-      if (json && typeof json === "object") {
-        for (const [k, v] of Object.entries(json as Record<string, unknown>)) {
-          if (v !== null && v !== undefined && String(v).trim()) {
-            collected[k] = String(v).trim();
-          }
-        }
-      }
+      flattenJsonIntoParams(json, collected);
       return collected;
     }
 
@@ -144,13 +217,9 @@ export async function extractCalloParamsFromRequest(
     const rawText = (await req.text()).trim();
     if (!rawText) return collected;
 
-    if (rawText.startsWith("{")) {
-      const parsed = JSON.parse(rawText) as Record<string, unknown>;
-      for (const [k, v] of Object.entries(parsed)) {
-        if (v !== null && v !== undefined && String(v).trim()) {
-          collected[k] = String(v).trim();
-        }
-      }
+    if (rawText.startsWith("{") || rawText.startsWith("[")) {
+      const parsed = JSON.parse(rawText) as unknown;
+      flattenJsonIntoParams(parsed, collected);
     } else if (rawText.includes("=")) {
       const sp = new URLSearchParams(rawText);
       sp.forEach((value, key) => {
@@ -171,7 +240,7 @@ export async function getDefaultWhatsappInstanceForCallo() {
   );
 }
 
-async function saveLastCalloWebhookDebug(
+export async function saveLastCalloWebhookDebug(
   instanceId: string | undefined,
   debug: CalloLastWebhookDebug
 ) {
@@ -190,10 +259,10 @@ async function saveLastCalloWebhookDebug(
 
 export async function processCalloLeadWebhook(
   rawParams: Record<string, string>,
-  options?: { instanceId?: string; isTest?: boolean }
+  options?: { instanceId?: string; isTest?: boolean; method?: string }
 ) {
   const phoneInput = normalizeCalloPhoneInput(rawParams);
-  const callId = pickParam(rawParams, ["ct_call_id", "call_id", "callId"]);
+  const callId = pickParam(rawParams, ["ct_call_id", "call_id", "callId", "id"]);
   const campaignId = pickParam(rawParams, ["ct_campaign_id", "campaign_id", "campaignId"]);
   const buttonNum = pickParam(rawParams, ["ct_button_num", "button_num", "button", "digit", "dtmf"]);
   const callStatus = pickParam(rawParams, ["ct_status", "status"]);
@@ -202,6 +271,7 @@ export async function processCalloLeadWebhook(
   const completedAt = pickParam(rawParams, ["ct_completed", "completed_at"]);
   const transcribing = pickParam(rawParams, ["ct_transcribing", "transcribing"]);
   const clientName = pickParam(rawParams, ["ct_name", "name", "client_name"]);
+  const rawSummary = summarizeCalloParams(rawParams);
 
   const instanceId =
     options?.instanceId || (await getDefaultWhatsappInstanceForCallo())?.id;
@@ -211,17 +281,34 @@ export async function processCalloLeadWebhook(
     await saveLastCalloWebhookDebug(instanceId, {
       receivedAt: new Date().toISOString(),
       phone: phoneInput || "—",
+      method: options?.method,
       callId: callId || undefined,
       campaignId: campaignId || undefined,
       buttonNum: buttonNum || undefined,
       callStatus: callStatus || undefined,
-      outcome: "error",
-      note: "Не передан корректный номер телефона (ct_phone)",
+      outcome: options?.isTest ? "error" : "ignored",
+      note: options?.isTest
+        ? "Не передан корректный номер телефона (ct_phone)"
+        : "Входящий запрос/пинг без номера телефона (принят HTTP 200)",
+      rawSummary,
     });
+
+    if (options?.isTest) {
+      return {
+        success: false as const,
+        statusCode: 400,
+        error: "Не передан корректный номер телефона (ct_phone)",
+      };
+    }
+
     return {
-      success: false as const,
-      statusCode: 400,
-      error: "Не передан корректный номер телефона (ct_phone)",
+      success: true as const,
+      statusCode: 200,
+      ping: true,
+      warning: "ct_phone_missing",
+      receivedKeys: Object.keys(rawParams).filter(
+        (k) => !/token|secret|password|auth/i.test(k)
+      ),
     };
   }
 
@@ -237,11 +324,13 @@ export async function processCalloLeadWebhook(
     await saveLastCalloWebhookDebug(instanceId, {
       receivedAt: new Date().toISOString(),
       phone: cleanPhone,
+      method: options?.method,
       callId: callId || undefined,
       campaignId: campaignId || undefined,
       callStatus,
       outcome: "ignored",
       note: `Звонок не завершился ответом (${callStatus})`,
+      rawSummary,
     });
     return {
       success: true as const,
@@ -261,6 +350,7 @@ export async function processCalloLeadWebhook(
       await saveLastCalloWebhookDebug(instanceId, {
         receivedAt: new Date().toISOString(),
         phone: cleanPhone,
+        method: options?.method,
         callId,
         campaignId: campaignId || undefined,
         buttonNum: buttonNum || undefined,
@@ -268,6 +358,7 @@ export async function processCalloLeadWebhook(
         outcome: "deduplicated",
         contactId: existingNote.contactId,
         note: "Повторный вебхук по тому же ct_call_id пропущен",
+        rawSummary,
       });
       return {
         success: true as const,
@@ -413,6 +504,7 @@ export async function processCalloLeadWebhook(
   await saveLastCalloWebhookDebug(instanceId, {
     receivedAt: new Date().toISOString(),
     phone: cleanPhone,
+    method: options?.method,
     callId: callId || undefined,
     campaignId: campaignId || undefined,
     buttonNum: buttonNum || undefined,
@@ -426,6 +518,7 @@ export async function processCalloLeadWebhook(
     note: createdDeal
       ? `Создана сделка в «${targetPipeline?.name}» → «${targetStage?.name}»`
       : `Обновлен существующий лид в «${targetPipeline?.name || "CRM"}»`,
+    rawSummary,
   });
 
   safeRevalidate("/deals");
