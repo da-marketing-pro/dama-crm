@@ -4,12 +4,15 @@ import { useState } from "react";
 import { DealItem } from "../types";
 import { moveDealPipeline } from "../actions";
 import { formatCurrency } from "@/lib/utils";
+import { getDisplayContactName, resolveDealSource } from "@/lib/dealSource";
 import {
-  Building,
   Clock,
   CheckCircle2,
   AlertCircle,
   ArrowRightLeft,
+  Phone,
+  User,
+  Tag,
 } from "lucide-react";
 
 interface PipelineOption {
@@ -98,6 +101,14 @@ export function DealCard({
   }
 
   const TaskIcon = taskBadge.icon;
+  const dealSource = deal.source ?? resolveDealSource(deal);
+  const displayName = getDisplayContactName(deal.contact.name, deal.contact.phone);
+  const isTargetSource = Boolean(
+    dealSource && /таргет|instagram|инст/i.test(dealSource)
+  );
+  const isAutodialerSource = Boolean(
+    dealSource && /автообзвон|callo/i.test(dealSource)
+  );
 
   return (
     <div
@@ -106,7 +117,7 @@ export function DealCard({
       onClick={() => onSelect(deal)}
       className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs hover:shadow-md hover:border-blue-400 transition-all cursor-grab active:cursor-grabbing select-none space-y-2.5 group"
     >
-      {/* Title & Task Badge */}
+      {/* 1) Название сделки & 7) Статус задачи */}
       <div className="flex items-start justify-between gap-2">
         <h4 className="font-bold text-xs text-slate-900 group-hover:text-blue-600 transition-colors leading-snug line-clamp-2">
           {deal.title}
@@ -119,15 +130,36 @@ export function DealCard({
         </span>
       </div>
 
-      {/* Contact info */}
-      <div className="text-[11px] text-slate-500 space-y-0.5">
-        <div className="font-medium text-slate-800 truncate">
-          {deal.contact.name}
+      {/* 2) Источник */}
+      {dealSource && (
+        <div className="flex items-center">
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-semibold ${
+              isTargetSource
+                ? "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200"
+                : isAutodialerSource
+                ? "bg-amber-50 text-amber-800 border-amber-200"
+                : "bg-slate-100 text-slate-700 border-slate-200"
+            }`}
+          >
+            <Tag className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{dealSource}</span>
+          </span>
         </div>
-        {deal.contact.company && (
-          <div className="flex items-center gap-1 text-slate-400 text-[10px] truncate">
-            <Building className="w-3 h-3 shrink-0" />
-            <span>{deal.contact.company}</span>
+      )}
+
+      {/* 3) Имя+фамилия (если есть) & 4) Номер телефона */}
+      <div className="space-y-1 text-[11px]">
+        {displayName && (
+          <div className="flex items-center gap-1.5 font-medium text-slate-800 truncate">
+            <User className="w-3 h-3 text-slate-400 shrink-0" />
+            <span className="truncate">{displayName}</span>
+          </div>
+        )}
+        {deal.contact.phone && (
+          <div className="flex items-center gap-1.5 font-medium text-slate-600 tabular-nums truncate">
+            <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+            <span className="truncate">{deal.contact.phone}</span>
           </div>
         )}
       </div>
@@ -150,44 +182,46 @@ export function DealCard({
         </div>
       )}
 
-      {/* Quick Move Pipeline right on card */}
-      {pipelines.length > 1 && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="pt-1 flex items-center gap-1.5"
-        >
-          <ArrowRightLeft className="w-3 h-3 text-slate-400 shrink-0" />
-          <select
-            aria-label="Переместить лид в другую воронку"
-            value={deal.pipelineId}
-            disabled={isMovingPipeline}
-            onChange={handleQuickMovePipeline}
-            className="w-full px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer disabled:opacity-50 truncate"
-          >
-            {pipelines.map((p) => (
-              <option key={p.id} value={p.id}>
-                {isMovingPipeline ? "Перенос..." : `Воронка: ${p.name}`}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Bottom Bar: Budget & Responsible */}
-      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+      {/* Bottom Bar: 6) Сумма сделки, 5) Ответственный + скрытый перенос без текста воронки */}
+      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
         <div className="font-bold text-blue-600">
           {formatCurrency(deal.totalBudget, deal.currency)}
         </div>
 
-        <div className="flex items-center gap-1 text-[11px] text-slate-500">
-          <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-[10px] border border-slate-200">
-            {deal.assignedTo?.name ? deal.assignedTo.name.charAt(0) : "—"}
-          </span>
-          <span className="truncate max-w-[80px]">
-            {deal.assignedTo?.name ? deal.assignedTo.name.split(" ")[0] : "Без отв."}
-          </span>
+        <div className="flex items-center gap-1.5">
+          {pipelines.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Перенести в другую воронку"
+              className="relative w-6 h-6 rounded-lg border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 text-slate-400 hover:text-blue-600 flex items-center justify-center transition-colors shrink-0"
+            >
+              <ArrowRightLeft className="w-3 h-3 pointer-events-none" />
+              <select
+                aria-label="Перенести в другую воронку"
+                value={deal.pipelineId}
+                disabled={isMovingPipeline}
+                onChange={handleQuickMovePipeline}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              >
+                {pipelines.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 text-[11px] text-slate-500">
+            <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-[10px] border border-slate-200">
+              {deal.assignedTo?.name ? deal.assignedTo.name.charAt(0) : "—"}
+            </span>
+            <span className="truncate max-w-[80px]">
+              {deal.assignedTo?.name ? deal.assignedTo.name.split(" ")[0] : "Без отв."}
+            </span>
+          </div>
         </div>
       </div>
     </div>

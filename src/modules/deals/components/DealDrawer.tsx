@@ -7,6 +7,7 @@ import { updateDeal, deleteDeal } from "../actions";
 import { addPayment, deletePayment } from "@/modules/payments/actions";
 import { createTask, completeTask } from "@/modules/tasks/actions";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { buildDealSourceOptions } from "@/lib/dealSource";
 import { Currency, StageType } from "@prisma/client";
 import { EmbeddedWhatsappChat } from "@/modules/whatsapp/components/EmbeddedWhatsappChat";
 import {
@@ -50,6 +51,7 @@ interface DealDrawerProps {
   currentUserId: string;
   users: { id: string; name: string }[];
   pipelines: PipelineInfo[];
+  sourceOptions?: string[];
   onDealDeleted?: () => void;
   onDealUpdated?: () => void;
 }
@@ -62,6 +64,7 @@ export function DealDrawer({
   currentUserId,
   users,
   pipelines,
+  sourceOptions,
   onDealDeleted,
   onDealUpdated,
 }: DealDrawerProps) {
@@ -75,6 +78,7 @@ export function DealDrawer({
   const [currency, setCurrency] = useState<Currency>(deal.currency);
   const [pipelineId, setPipelineId] = useState(deal.pipelineId);
   const [stageId, setStageId] = useState(deal.stageId);
+  const [source, setSource] = useState(deal.source || "");
   const [assignedToId, setAssignedToId] = useState(deal.assignedToId || "");
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -130,6 +134,7 @@ export function DealDrawer({
       currency,
       pipelineId,
       stageId,
+      source,
       assignedToId: isAdmin ? assignedToId : undefined,
     });
 
@@ -421,6 +426,27 @@ export function DealDrawer({
                     <option value="RUB">RUB (₽)</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Источник лида */}
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Источник
+                </label>
+                <select
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                >
+                  <option value="">Не указан</option>
+                  {buildDealSourceOptions(
+                    source ? [...(sourceOptions || []), source] : sourceOptions
+                  ).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Responsible user */}

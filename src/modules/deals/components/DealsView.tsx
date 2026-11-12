@@ -27,6 +27,7 @@ interface DealsViewProps {
   isAdmin: boolean;
   currentUserId: string;
   users: { id: string; name: string }[];
+  sourceOptions?: string[];
   currencyRateUsd?: number;
   currencyRateRub?: number;
 }
@@ -36,6 +37,7 @@ export function DealsView({
   isAdmin,
   currentUserId,
   users,
+  sourceOptions,
   currencyRateUsd = 495,
   currencyRateRub = 5.2,
 }: DealsViewProps) {
@@ -255,6 +257,7 @@ export function DealsView({
         defaultPipelineId={activePipelineId}
         users={users}
         currentUserId={currentUserId}
+        sourceOptions={sourceOptions}
         onCreated={() => router.refresh()}
       />
 
@@ -289,6 +292,7 @@ export function DealsView({
             currentUserId={currentUserId}
             users={users}
             pipelines={pipelines}
+            sourceOptions={sourceOptions}
             onDealDeleted={() => {
               setSelectedDeal(null);
               router.refresh();

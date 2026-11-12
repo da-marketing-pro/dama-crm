@@ -30,6 +30,8 @@ export interface DealItem {
   totalBudget: number;
   currency: Currency;
   exchangeRateAtCreation: number;
+  source?: string | null;
+  customFields?: Record<string, unknown> | null;
   createdAt: Date | string;
   closedAt?: Date | string | null;
   contactId: string;

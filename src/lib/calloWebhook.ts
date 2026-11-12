@@ -426,6 +426,9 @@ export async function processCalloLeadWebhook(
         phone: cleanPhone,
         company: "Автообзвон Callo",
         assignedToId: assignedUserId,
+        customFields: {
+          "Источник лида": "Автообзвон",
+        },
       },
       include: {
         deals: {
@@ -472,6 +475,9 @@ export async function processCalloLeadWebhook(
           assignedToId: assignedUserId,
           totalBudget: 0,
           currency: "KZT",
+          customFields: {
+            source: "Автообзвон",
+          },
         },
       });
       dealId = newDeal.id;

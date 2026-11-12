@@ -287,6 +287,10 @@ export async function POST(req: NextRequest) {
       }
 
       const contextInfo = extractContextInfo(msgItem, rawMessage);
+      const externalAd =
+        contextInfo?.externalAdReply && typeof contextInfo.externalAdReply === "object"
+          ? (contextInfo.externalAdReply as Record<string, unknown>)
+          : undefined;
       const isFromAd = Boolean(
         contextInfo &&
           (contextInfo.externalAdReply ||
@@ -294,6 +298,16 @@ export async function POST(req: NextRequest) {
             contextInfo.ctwaPayload ||
             contextInfo.conversionData)
       );
+      const adSourceApp =
+        (typeof externalAd?.sourceApp === "string" && externalAd.sourceApp) ||
+        (typeof contextInfo?.conversionSource === "string" && contextInfo.conversionSource) ||
+        undefined;
+      const adTitle = typeof externalAd?.title === "string" ? externalAd.title : undefined;
+      const adBody = typeof externalAd?.body === "string" ? externalAd.body : undefined;
+      const adSourceUrl =
+        (typeof externalAd?.sourceUrl === "string" && externalAd.sourceUrl) ||
+        (typeof externalAd?.thumbnailUrl === "string" && externalAd.thumbnailUrl) ||
+        undefined;
 
       // Пропускаем пустые системные уведомления без текста и медиа
       if (!textContent && !mediaUrl) {
@@ -310,6 +324,10 @@ export async function POST(req: NextRequest) {
         fileName,
         instanceId: instance?.id,
         isFromAd,
+        adSourceApp,
+        adTitle,
+        adBody,
+        adSourceUrl,
         fromMe: isFromMe,
       });
 

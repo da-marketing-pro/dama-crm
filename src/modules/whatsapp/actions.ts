@@ -43,6 +43,7 @@ import {
   normalizeQuickTemplates,
   WhatsappQuickTemplate,
 } from "@/lib/whatsappTemplates";
+import { detectWhatsappLeadSource } from "@/lib/dealSource";
 import { processCalloLeadWebhook } from "@/lib/calloWebhook";
 
 function isConfiguredEvolutionGateway(
@@ -516,6 +517,10 @@ export async function processIncomingWhatsappWebhook(payload: {
   fileName?: string;
   instanceId?: string;
   isFromAd?: boolean;
+  adSourceApp?: string;
+  adTitle?: string;
+  adBody?: string;
+  adSourceUrl?: string;
   fromMe?: boolean;
 }) {
   try {
@@ -621,6 +626,15 @@ export async function processIncomingWhatsappWebhook(payload: {
         }
       }
 
+      const autoLeadSource = detectWhatsappLeadSource({
+        isFromAd: payload.isFromAd,
+        adSourceApp: payload.adSourceApp,
+        adTitle: payload.adTitle,
+        adBody: payload.adBody,
+        adSourceUrl: payload.adSourceUrl,
+        textContent: payload.textContent,
+      });
+
       isNewContact = true;
       // Создаем новый контакт
       contact = await prisma.contact.create({
@@ -629,6 +643,9 @@ export async function processIncomingWhatsappWebhook(payload: {
           phone: cleanPhone,
           company: "WhatsApp Лид",
           assignedToId: assignedUserId,
+          customFields: {
+            "Источник лида": autoLeadSource,
+          },
         },
         include: {
           deals: {
@@ -662,18 +679,21 @@ export async function processIncomingWhatsappWebhook(payload: {
             assignedToId: assignedUserId,
             totalBudget: 0,
             currency: "KZT",
+            customFields: {
+              source: autoLeadSource,
+            },
           },
         });
         dealId = newDeal.id;
 
         // Фиксируем запись в таймлайне
         if (assignedUserId) {
-          const adTag = payload.isFromAd ? " Источник: реклама Click-to-WhatsApp." : "";
+          const sourceTag = ` Источник: ${autoLeadSource}.`;
           await prisma.contactNote.create({
             data: {
               contactId: contact.id,
               authorId: assignedUserId,
-              content: `Автоматически создан новый контакт и сделка «${newDeal.title}» в этапе «${firstStage.name}» из входящего сообщения WhatsApp.${adTag}`,
+              content: `Автоматически создан новый контакт и сделка «${newDeal.title}» в этапе «${firstStage.name}» из входящего сообщения WhatsApp.${sourceTag}`,
             },
           });
         }
@@ -1615,6 +1635,10 @@ export async function importWhatsappLeadChatsToCrm(params: {
         if (contactEntry.dealPipelineIds.has(targetPipeline.id)) {
           skippedExistingDealsCount++;
         } else {
+          const chatLeadSource = detectWhatsappLeadSource({
+            labels: chat.labels,
+            textContent: chat.lastMessageText || undefined,
+          });
           const deal = await prisma.deal.create({
             data: {
               title: hasLeadLabel
@@ -1627,6 +1651,9 @@ export async function importWhatsappLeadChatsToCrm(params: {
               currency: Currency.KZT,
               exchangeRateAtCreation: 1.0,
               assignedToId: user.id,
+              customFields: {
+                source: chatLeadSource,
+              },
             },
           });
           contactEntry.dealPipelineIds.add(targetPipeline.id);

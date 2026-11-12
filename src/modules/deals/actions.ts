@@ -3,7 +3,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Currency, Role, StageType } from "@prisma/client";
+import { Currency, Prisma, Role, StageType } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 
 async function getAuthUser() {
@@ -53,6 +53,7 @@ export async function createDeal(data: {
   contactName?: string;
   contactPhone?: string;
   contactCompany?: string;
+  source?: string;
 }) {
   try {
     const user = await getAuthUser();
@@ -109,6 +110,9 @@ export async function createDeal(data: {
         currency: data.currency,
         exchangeRateAtCreation: exchangeRate,
         assignedToId: data.assignedToId || user.id,
+        ...(data.source?.trim()
+          ? { customFields: { source: data.source.trim() } }
+          : {}),
       },
     });
 
@@ -263,6 +267,7 @@ export async function updateDeal(
     pipelineId?: string;
     stageId?: string;
     assignedToId?: string;
+    source?: string;
   }
 ) {
   try {
@@ -282,10 +287,28 @@ export async function updateDeal(
       stageId?: string;
       closedAt?: Date | null;
       assignedToId?: string;
+      customFields?: Prisma.InputJsonValue;
     } = {};
     if (data.title) updateData.title = data.title.trim();
     if (data.totalBudget !== undefined) updateData.totalBudget = Number(data.totalBudget);
     if (data.currency) updateData.currency = data.currency;
+    if (data.source !== undefined) {
+      const prevFields =
+        deal.customFields &&
+        typeof deal.customFields === "object" &&
+        !Array.isArray(deal.customFields)
+          ? { ...(deal.customFields as Record<string, unknown>) }
+          : {};
+      const nextSource = data.source.trim();
+      if (nextSource) {
+        prevFields.source = nextSource;
+      } else {
+        delete prevFields.source;
+        delete prevFields["Источник"];
+        delete prevFields["Источник лида"];
+      }
+      updateData.customFields = prevFields as Prisma.InputJsonValue;
+    }
 
     const targetPipelineId = data.pipelineId || deal.pipelineId;
     if (data.pipelineId || data.stageId) {
