@@ -432,17 +432,43 @@ export async function sendWhatsappMessage(data: {
       }
     }
 
-    // Сохраняем исходящее сообщение (нормализуем номер без + для склейки с входящим вебхуком)
-    const storedRemoteJid = data.remoteJid.includes("@")
-      ? data.remoteJid
-      : data.remoteJid.replace(/[^\d]/g, "") || data.remoteJid;
+    // Сохраняем исходящее сообщение под каноническим remoteJid (+7...), как и входящие вебхуки
+    const parsedOutJid = extractPhoneKeyAndRaw(data.remoteJid);
+    const storedRemoteJid = parsedOutJid?.rawDisplay || data.remoteJid;
+
+    let resolvedContactId = data.contactId || null;
+    let resolvedDealId = data.dealId || null;
+
+    if (!resolvedContactId && parsedOutJid && !parsedOutJid.isLid && parsedOutJid.last10.length >= 10) {
+      const matchedContact = await prisma.contact.findFirst({
+        where: {
+          OR: [
+            { phone: storedRemoteJid },
+            { phone: { contains: parsedOutJid.last10 } },
+          ],
+        },
+        include: {
+          deals: {
+            include: { stage: true },
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      });
+      if (matchedContact) {
+        resolvedContactId = matchedContact.id;
+        if (!resolvedDealId && matchedContact.deals.length > 0) {
+          const openDeal = matchedContact.deals.find((d) => d.stage.type === StageType.OPEN);
+          resolvedDealId = openDeal?.id || matchedContact.deals[0].id;
+        }
+      }
+    }
 
     const message = await prisma.whatsappMessage.create({
       data: {
         instanceId: instance.id,
         remoteJid: storedRemoteJid,
-        contactId: data.contactId || null,
-        dealId: data.dealId || null,
+        contactId: resolvedContactId,
+        dealId: resolvedDealId,
         fromMe: true,
         senderName: user.name || "Менеджер",
         messageType: data.messageType,
@@ -454,7 +480,7 @@ export async function sendWhatsappMessage(data: {
     });
 
     // Если указан контакт — добавляем запись в таймлайн
-    if (data.contactId) {
+    if (resolvedContactId) {
       let previewText = data.textContent || "Вложение";
       if (data.messageType === WhatsappMessageType.AUDIO) previewText = "Голосовое сообщение (исходящее)";
       if (data.messageType === WhatsappMessageType.IMAGE) previewText = "Изображение (исходящее)";
@@ -462,7 +488,7 @@ export async function sendWhatsappMessage(data: {
 
       await prisma.contactNote.create({
         data: {
-          contactId: data.contactId,
+          contactId: resolvedContactId,
           authorId: user.id,
           content: `WhatsApp (Исходящее): ${previewText}`,
         },
@@ -490,6 +516,7 @@ export async function processIncomingWhatsappWebhook(payload: {
   fileName?: string;
   instanceId?: string;
   isFromAd?: boolean;
+  fromMe?: boolean;
 }) {
   try {
     const normalizedPhone = extractPhoneKeyAndRaw(payload.phone, payload.rawRemoteJid);
@@ -571,6 +598,15 @@ export async function processIncomingWhatsappWebhook(payload: {
     const assignedUserId = firstUser?.id;
 
     if (!contact) {
+      // Исходящие сообщения с телефона/WhatsApp Web на незнакомые номера не должны создавать лиды
+      if (payload.fromMe) {
+        return {
+          success: true,
+          ignored: true,
+          reason: "from_me_unknown_contact",
+        };
+      }
+
       // Фильтр Варианта 4: незнакомые номера создают лид только с рекламы / ключевых слов
       const filterMode = normalizeLeadFilterMode(instance.leadFilterMode);
       if (filterMode === "ONLY_ADS_OR_KEYWORDS") {
@@ -652,6 +688,39 @@ export async function processIncomingWhatsappWebhook(payload: {
       }
     }
 
+    const msgType = payload.messageType || WhatsappMessageType.TEXT;
+    const isFromMe = payload.fromMe === true;
+
+    // Если это исходящее сообщение (fromMe), проверяем, не было ли оно только что сохранено самой CRM
+    if (isFromMe) {
+      const dedupWindowStart = new Date(Date.now() - 90_000);
+      const recentDuplicate = await prisma.whatsappMessage.findFirst({
+        where: {
+          fromMe: true,
+          messageType: msgType,
+          timestamp: { gte: dedupWindowStart },
+          ...(payload.textContent?.trim() ? { textContent: payload.textContent.trim() } : {}),
+          OR: [
+            { contactId: contact.id },
+            { remoteJid: cleanPhone },
+            { remoteJid: normalizedPhone.phoneKey },
+          ],
+        },
+        select: { id: true },
+      });
+
+      if (recentDuplicate) {
+        return {
+          success: true,
+          ignored: true,
+          reason: "from_me_already_saved",
+          contactId: contact.id,
+          dealId,
+          messageId: recentDuplicate.id,
+        };
+      }
+    }
+
     // 2. Сохраняем сообщение
     const message = await prisma.whatsappMessage.create({
       data: {
@@ -659,9 +728,11 @@ export async function processIncomingWhatsappWebhook(payload: {
         remoteJid: cleanPhone,
         contactId: contact.id,
         dealId,
-        fromMe: false,
-        senderName: payload.senderName || contact.name,
-        messageType: payload.messageType || WhatsappMessageType.TEXT,
+        fromMe: isFromMe,
+        senderName: isFromMe
+          ? "WhatsApp (телефон)"
+          : payload.senderName || contact.name,
+        messageType: msgType,
         textContent: payload.textContent || null,
         mediaUrl: payload.mediaUrl || null,
         fileName: payload.fileName || null,
@@ -672,15 +743,23 @@ export async function processIncomingWhatsappWebhook(payload: {
     // 3. Запись в таймлайн
     if (assignedUserId) {
       let previewText = payload.textContent || "Вложение";
-      if (payload.messageType === WhatsappMessageType.AUDIO) previewText = "Голосовое сообщение (входящее)";
-      if (payload.messageType === WhatsappMessageType.IMAGE) previewText = "Изображение (входящее)";
-      if (payload.messageType === WhatsappMessageType.DOCUMENT) previewText = `Документ: ${payload.fileName || "Файл"}`;
+      if (msgType === WhatsappMessageType.AUDIO) {
+        previewText = isFromMe ? "Голосовое сообщение (с телефона)" : "Голосовое сообщение (входящее)";
+      }
+      if (msgType === WhatsappMessageType.IMAGE) {
+        previewText = isFromMe ? "Изображение (с телефона)" : "Изображение (входящее)";
+      }
+      if (msgType === WhatsappMessageType.DOCUMENT) {
+        previewText = `Документ: ${payload.fileName || "Файл"}`;
+      }
 
       await prisma.contactNote.create({
         data: {
           contactId: contact.id,
           authorId: assignedUserId,
-          content: `WhatsApp (Входящее от ${payload.senderName || cleanPhone}): ${previewText}`,
+          content: isFromMe
+            ? `WhatsApp (Исходящее с телефона): ${previewText}`
+            : `WhatsApp (Входящее от ${payload.senderName || cleanPhone}): ${previewText}`,
         },
       });
     }
@@ -731,26 +810,41 @@ export async function getChatConversations(): Promise<ChatConversation[]> {
   const convMap = new Map<string, ChatConversation>();
 
   for (const msg of messages) {
-    if (!convMap.has(msg.remoteJid)) {
-      if (
-        matchesIgnoredKeySets(msg.remoteJid, ignoredSets) ||
-        matchesIgnoredKeySets(msg.contact?.phone, ignoredSets)
-      ) {
-        continue;
-      }
+    if (
+      matchesIgnoredKeySets(msg.remoteJid, ignoredSets) ||
+      matchesIgnoredKeySets(msg.contact?.phone, ignoredSets)
+    ) {
+      continue;
+    }
 
-      const contact = msg.contact;
-      if (!isAdmin && contact && contact.assignedToId && contact.assignedToId !== user.id) {
-        continue;
-      }
+    const contact = msg.contact;
+    if (!isAdmin && contact && contact.assignedToId && contact.assignedToId !== user.id) {
+      continue;
+    }
 
-      const deal = msg.deal || contact?.deals?.[0] || null;
+    const parsedJid = extractPhoneKeyAndRaw(msg.remoteJid, contact?.phone);
+    const canonicalJid = parsedJid?.rawDisplay || msg.remoteJid;
+    const convKey =
+      parsedJid && !parsedJid.isLid
+        ? `phone:${parsedJid.phoneKey}`
+        : msg.contactId
+        ? `contact:${msg.contactId}`
+        : parsedJid
+        ? `phone:${parsedJid.phoneKey}`
+        : `raw:${msg.remoteJid}`;
 
-      convMap.set(msg.remoteJid, {
-        remoteJid: msg.remoteJid,
+    const deal = msg.deal || contact?.deals?.[0] || null;
+    const existing = convMap.get(convKey);
+
+    if (!existing) {
+      convMap.set(convKey, {
+        remoteJid: canonicalJid,
         contactId: contact?.id || null,
-        contactName: contact?.name || msg.senderName || msg.remoteJid,
-        contactPhone: contact?.phone || msg.remoteJid,
+        contactName:
+          contact?.name ||
+          (!msg.fromMe ? msg.senderName : null) ||
+          canonicalJid,
+        contactPhone: contact?.phone || canonicalJid,
         company: contact?.company || null,
         lastMessage: {
           textContent: msg.textContent,
@@ -773,17 +867,60 @@ export async function getChatConversations(): Promise<ChatConversation[]> {
             }
           : null,
       });
+    } else {
+      // Дозаполняем данные контакта/сделки из более старых сообщений того же диалога, если у последнего сообщения они не были привязаны
+      if (!existing.contactId && contact) {
+        existing.contactId = contact.id;
+        existing.contactName = contact.name;
+        existing.contactPhone = contact.phone;
+        existing.company = contact.company;
+      }
+      if (!existing.deal && deal) {
+        existing.deal = {
+          id: deal.id,
+          title: deal.title,
+          pipelineId: deal.pipelineId,
+          stageId: deal.stageId,
+          stageName: deal.stage.name,
+          stageColor: deal.stage.color,
+          stageType: deal.stage.type,
+          totalBudget: Number(deal.totalBudget),
+          currency: deal.currency,
+        };
+      }
     }
   }
 
   return Array.from(convMap.values());
 }
 
-// 6. Получить все сообщения конкретной беседы по remoteJid
+// 6. Получить все сообщения конкретной беседы по каноническому remoteJid (склейка +7..., 7..., @s.whatsapp.net)
 export async function getChatMessages(remoteJid: string): Promise<WhatsappMessageItem[]> {
   await getAuthUser();
+  const parsed = extractPhoneKeyAndRaw(remoteJid);
+  const candidateJids = Array.from(
+    new Set(
+      [
+        remoteJid,
+        parsed?.rawDisplay,
+        parsed?.phoneKey,
+        parsed && !parsed.isLid ? `${parsed.phoneKey}@s.whatsapp.net` : undefined,
+      ].filter((v): v is string => Boolean(v))
+    )
+  );
+
   const messages = await prisma.whatsappMessage.findMany({
-    where: { remoteJid },
+    where: {
+      OR: [
+        ...candidateJids.map((jid) => ({ remoteJid: jid })),
+        ...(parsed && !parsed.isLid && parsed.last10.length >= 10
+          ? [
+              { remoteJid: { contains: parsed.last10 } },
+              { contact: { phone: { contains: parsed.last10 } } },
+            ]
+          : []),
+      ],
+    },
     orderBy: { timestamp: "asc" },
   });
 
@@ -1508,7 +1645,7 @@ export async function importWhatsappLeadChatsToCrm(params: {
             instanceId: params.instanceId,
             contactId: contactEntry.id,
             dealId: createdDealId,
-            remoteJid: displayPhone.replace(/^\+/, ""),
+            remoteJid: displayPhone,
             fromMe: false,
             senderName: cleanName,
             messageType: WhatsappMessageType.TEXT,

@@ -203,9 +203,7 @@ export async function POST(req: NextRequest) {
       if (rawRemoteJid.endsWith("@g.us")) {
         return NextResponse.json({ success: true, ignored: "group_message" });
       }
-      if (key.fromMe === true) {
-        return NextResponse.json({ success: true, ignored: "from_me" });
-      }
+      const isFromMe = key.fromMe === true;
 
       // Если WhatsApp прислал LID, предпочитаем альтернативный телефонный JID если он есть
       const phoneSource =
@@ -312,6 +310,7 @@ export async function POST(req: NextRequest) {
         fileName,
         instanceId: instance?.id,
         isFromAd,
+        fromMe: isFromMe,
       });
 
       if (!result.success) {
