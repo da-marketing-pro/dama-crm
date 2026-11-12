@@ -57,22 +57,25 @@ enum ChartType {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(MANAGER)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  recoveryEmail String?
+  passwordHash  String
+  role          Role     @default(MANAGER)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  assignedContacts Contact[]         @relation("AssignedContacts")
-  assignedDeals    Deal[]            @relation("AssignedDeals")
-  assignedTasks    Task[]            @relation("AssignedTasks")
-  createdTasks     Task[]            @relation("CreatedTasks")
-  notes            ContactNote[]     @relation("AuthorNotes")
-  dashboardWidgets DashboardWidget[]
+  assignedContacts    Contact[]            @relation("AssignedContacts")
+  assignedDeals       Deal[]               @relation("AssignedDeals")
+  assignedTasks       Task[]               @relation("AssignedTasks")
+  createdTasks        Task[]               @relation("CreatedTasks")
+  notes               ContactNote[]        @relation("AuthorNotes")
+  dashboardWidgets    DashboardWidget[]
+  passwordResetTokens PasswordResetToken[]
 
+  @@index([recoveryEmail])
   @@map("users")
 }
 
@@ -298,4 +301,32 @@ model DashboardWidget {
 
   @@index([userId])
   @@map("dashboard_widgets")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model SmtpSetting {
+  id        String   @id @default(cuid())
+  host      String   @default("")
+  port      Int      @default(465)
+  secure    Boolean  @default(true)
+  user      String   @default("")
+  password  String   @default("")
+  fromEmail String   @default("")
+  fromName  String   @default("DAMA CRM")
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  @@map("smtp_settings")
 }

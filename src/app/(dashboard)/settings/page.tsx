@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { EmployeeManager } from "@/modules/settings/components/EmployeeManager";
+import { SecurityRecoveryCard } from "@/modules/settings/components/SecurityRecoveryCard";
 import { CurrencyManager } from "@/modules/settings/components/CurrencyManager";
 import { PipelinePreview } from "@/modules/settings/components/PipelinePreview";
 import { Users, DollarSign, GitBranch, Settings as SettingsIcon, MessageCircle, ArrowRight } from "lucide-react";
@@ -12,10 +13,17 @@ export default async function SettingsPage() {
   const user = session?.user;
   const isAdmin = user?.role === "ADMIN";
 
-  const [employees, currencySetting, pipelines] = await Promise.all([
+  const [employees, currencySetting, pipelines, smtpSetting] = await Promise.all([
     prisma.user.findMany({
       orderBy: { createdAt: "asc" },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        recoveryEmail: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
         _count: {
           select: {
             assignedDeals: true,
@@ -33,7 +41,25 @@ export default async function SettingsPage() {
         },
       },
     }),
+    isAdmin ? prisma.smtpSetting.findFirst() : Promise.resolve(null),
   ]);
+
+  const currentAdmin = isAdmin ? employees.find((e) => e.id === user?.id) : undefined;
+  const sanitizedSmtp = smtpSetting
+    ? {
+        host: smtpSetting.host,
+        port: smtpSetting.port,
+        secure: smtpSetting.secure,
+        user: smtpSetting.user,
+        fromEmail: smtpSetting.fromEmail,
+        fromName: smtpSetting.fromName,
+        enabled: smtpSetting.enabled,
+        hasPassword: Boolean(smtpSetting.password),
+      }
+    : null;
+  const envSmtpConfigured = Boolean(
+    process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
+  );
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -72,6 +98,18 @@ export default async function SettingsPage() {
           isAdmin={isAdmin}
         />
       </section>
+
+      {/* 1.5. Admin Account Security & Password Recovery */}
+      {isAdmin && (
+        <section>
+          <SecurityRecoveryCard
+            adminLoginEmail={currentAdmin?.email ?? user?.email ?? ""}
+            adminRecoveryEmail={currentAdmin?.recoveryEmail ?? null}
+            smtpSettings={sanitizedSmtp}
+            envSmtpConfigured={envSmtpConfigured}
+          />
+        </section>
+      )}
 
       {/* 2. Currency Management Section */}
       <section>
