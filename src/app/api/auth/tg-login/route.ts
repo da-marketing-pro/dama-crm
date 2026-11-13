@@ -12,6 +12,10 @@ export async function GET(req: NextRequest) {
   const redirectParam = searchParams.get("redirect");
   const isAuto = searchParams.get("auto") === "1";
 
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "crm.da-marketing.pro";
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const origin = `${proto}://${host}`;
+
   let targetUserId: string | null = null;
   let targetRedirect = redirectParam || (dealId ? `/deals?dealId=${dealId}` : "/deals");
 
@@ -33,7 +37,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (!targetUserId) {
-    return NextResponse.redirect(new URL("/login?error=InvalidTelegramToken", req.url));
+    return NextResponse.redirect(new URL("/login?error=InvalidTelegramToken", origin));
   }
 
   const user = await prisma.user.findUnique({
@@ -41,7 +45,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (!user || !user.isActive) {
-    return NextResponse.redirect(new URL("/login?error=UserNotFound", req.url));
+    return NextResponse.redirect(new URL("/login?error=UserNotFound", origin));
   }
 
   const sessionSecret = process.env.NEXTAUTH_SECRET || "crm-modular-secret-key-super-secure-12345";
@@ -58,9 +62,9 @@ export async function GET(req: NextRequest) {
     maxAge: 30 * 24 * 60 * 60,
   });
 
-  const response = NextResponse.redirect(new URL(targetRedirect, req.url));
+  const response = NextResponse.redirect(new URL(targetRedirect, origin));
 
-  const isHttps = req.headers.get("x-forwarded-proto") === "https" || req.url.startsWith("https:");
+  const isHttps = proto === "https";
 
   // Set session cookies for both secure and standard
   response.cookies.set("next-auth.session-token", sessionToken, {
