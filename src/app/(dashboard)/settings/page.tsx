@@ -5,6 +5,7 @@ import { EmployeeManager } from "@/modules/settings/components/EmployeeManager";
 import { SecurityRecoveryCard } from "@/modules/settings/components/SecurityRecoveryCard";
 import { CurrencyManager } from "@/modules/settings/components/CurrencyManager";
 import { PipelinePreview } from "@/modules/settings/components/PipelinePreview";
+import { TelegramManager } from "@/modules/settings/components/TelegramManager";
 import { Users, DollarSign, GitBranch, Settings as SettingsIcon, MessageCircle, ArrowRight } from "lucide-react";
 import Link from "next/link";
 
@@ -143,6 +144,13 @@ export default async function SettingsPage() {
           <ArrowRight className="w-3.5 h-3.5" />
         </Link>
       </section>
+
+      {/* 5. Telegram Integration Section */}
+      {isAdmin && (
+        <section>
+          <TelegramManager />
+        </section>
+      )}
     </div>
   );
 }

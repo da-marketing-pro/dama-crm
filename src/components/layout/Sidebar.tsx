@@ -14,12 +14,15 @@ import {
   Shield,
   User,
   ChevronRight,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTaskAlerts } from "@/contexts/TaskAlertsContext";
 
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const { overdueCount, hasUpcoming15MinTask } = useTaskAlerts();
 
   const user = session?.user;
   const isAdmin = user?.role === "ADMIN";
@@ -107,6 +110,30 @@ export function Sidebar() {
                 )}
               />
               <span className="flex-1">{item.title}</span>
+
+              {/* Task notification bell (2b): Green if within 15 min, Red with count if overdue */}
+              {item.href === "/tasks" && (
+                <>
+                  {overdueCount > 0 ? (
+                    <div
+                      className="flex items-center gap-1 bg-rose-500/20 border border-rose-500/40 px-1.5 py-0.5 rounded-full"
+                      title={`Просрочено задач: ${overdueCount}`}
+                    >
+                      <Bell className="w-3.5 h-3.5 text-rose-400 fill-rose-400 animate-pulse" />
+                      <span className="text-[10px] font-black text-rose-300">
+                        {overdueCount}
+                      </span>
+                    </div>
+                  ) : hasUpcoming15MinTask ? (
+                    <div
+                      className="flex items-center bg-emerald-500/20 border border-emerald-500/40 p-1 rounded-full"
+                      title="Задача начнется менее чем через 15 минут"
+                    >
+                      <Bell className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400 animate-bounce" />
+                    </div>
+                  ) : null}
+                </>
+              )}
 
               {item.badge && (
                 <span className="text-[10px] font-semibold bg-blue-500/30 text-blue-300 px-1.5 py-0.5 rounded border border-blue-400/30">

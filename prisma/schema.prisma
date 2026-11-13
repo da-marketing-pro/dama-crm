@@ -359,3 +359,15 @@ model SmtpSetting {
 
   @@map("smtp_settings")
 }
+
+model TelegramSetting {
+  id           String    @id @default(cuid())
+  botToken     String    @default("")
+  chatId       String    @default("")
+  enabled      Boolean   @default(false)
+  sendTime     String    @default("09:45")
+  lastSentDate String?
+  updatedAt    DateTime  @updatedAt
+
+  @@map("telegram_settings")
+}
