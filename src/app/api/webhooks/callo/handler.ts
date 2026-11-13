@@ -21,7 +21,7 @@ export async function handleCalloWebhookRequest(
       );
     }
 
-    const params = await extractCalloParamsFromRequest(req);
+    const { params, rawBody } = await extractCalloParamsFromRequest(req);
     const providedToken =
       pathToken ||
       req.headers.get("x-callo-token") ||
@@ -43,9 +43,26 @@ export async function handleCalloWebhookRequest(
       );
     }
 
+    // Диагностический режим: безопасная проверка работы роута без создания лидов и без перезаписи телеметрии
+    const isInspection =
+      req.method === "GET" &&
+      (req.nextUrl.searchParams.has("inspect") ||
+        req.nextUrl.searchParams.has("debug") ||
+        req.nextUrl.searchParams.has("status"));
+
+    if (isInspection) {
+      return NextResponse.json({
+        ok: true,
+        instanceId: instance.id,
+        instancePhone: instance.phoneNumber,
+        lastCalloWebhook: instance.lastCalloWebhook,
+      });
+    }
+
     const result = await processCalloLeadWebhook(params, {
       instanceId: instance.id,
       method: req.method,
+      rawBody,
     });
 
     return NextResponse.json(result, { status: result.statusCode });

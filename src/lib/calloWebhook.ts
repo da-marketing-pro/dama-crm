@@ -135,6 +135,7 @@ function flattenJsonIntoParams(
 }
 
 function normalizeCalloPhoneInput(params: Record<string, string>): string {
+  // 1. Прямые ключи номера клиента (включая ct_*, dst, callee, subscriber и т.д.)
   const direct = pickParam(params, [
     "ct_phone",
     "ct_phone8",
@@ -146,6 +147,14 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
     "ct_caller",
     "abonent",
     "subscriber",
+    "dst",
+    "callee",
+    "destination",
+    "called",
+    "contact",
+    "client",
+    "lead_phone",
+    "contact_phone",
     "src",
     "to",
     "msisdn",
@@ -160,13 +169,28 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
     return phone9;
   }
 
-  // Fallback эвристика по ключам, содержащим phone/tel/caller/abonent/msisdn
+  // 2. Поиск по ключам, содержащим маркеры телефона или абонента
   for (const [key, val] of Object.entries(params)) {
-    if (!/phone|tel|caller|abonent|msisdn/i.test(key)) continue;
+    if (!/phone|tel|caller|callee|abonent|msisdn|dst|dest|subscriber|called|number/i.test(key)) continue;
     const trimmed = val?.trim();
     if (!trimmed) continue;
     const parsed = extractPhoneKeyAndRaw(trimmed);
     if (parsed && !parsed.isLid && parsed.phoneKey.length >= 7) {
+      return trimmed;
+    }
+  }
+
+  // 3. Универсальный поиск: если в ЛЮБОМ значении передан валидный номер телефона (10-12 цифр)
+  for (const [, val] of Object.entries(params)) {
+    const trimmed = typeof val === "string" ? val.trim() : "";
+    if (!trimmed || trimmed.length < 10) continue;
+    const parsed = extractPhoneKeyAndRaw(trimmed);
+    if (
+      parsed &&
+      !parsed.isLid &&
+      (parsed.phoneKey.startsWith("7") || parsed.phoneKey.startsWith("8") || parsed.phoneKey.length >= 10) &&
+      parsed.phoneKey.length <= 13
+    ) {
       return trimmed;
     }
   }
@@ -176,61 +200,59 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
 
 export async function extractCalloParamsFromRequest(
   req: Request
-): Promise<Record<string, string>> {
+): Promise<{ params: Record<string, string>; rawBody?: string }> {
   const collected: Record<string, string> = {};
 
   try {
     const url = new URL(req.url);
     url.searchParams.forEach((value, key) => {
-      if (value) collected[key] = value;
+      if (value) collected[key] = value.trim();
     });
   } catch {
     // ignore malformed url
   }
 
-  if (req.method !== "POST") {
-    return collected;
+  if (req.method !== "POST" && req.method !== "PUT") {
+    return { params: collected };
   }
 
-  const contentType = (req.headers.get("content-type") || "").toLowerCase();
-
+  let rawText = "";
   try {
-    if (contentType.includes("application/json")) {
-      const json = await req.json();
-      flattenJsonIntoParams(json, collected);
-      return collected;
-    }
-
-    if (
-      contentType.includes("application/x-www-form-urlencoded") ||
-      contentType.includes("multipart/form-data")
-    ) {
-      const form = await req.formData();
-      form.forEach((value, key) => {
-        if (typeof value === "string" && value.trim()) {
-          collected[key] = value.trim();
-        }
-      });
-      return collected;
-    }
-
-    const rawText = (await req.text()).trim();
-    if (!rawText) return collected;
-
-    if (rawText.startsWith("{") || rawText.startsWith("[")) {
-      const parsed = JSON.parse(rawText) as unknown;
-      flattenJsonIntoParams(parsed, collected);
-    } else if (rawText.includes("=")) {
-      const sp = new URLSearchParams(rawText);
-      sp.forEach((value, key) => {
-        if (value) collected[key] = value;
-      });
-    }
+    rawText = (await req.text()).trim();
   } catch {
-    // Ignore empty/unparseable POST body if query params were supplied
+    // stream might be already consumed or unavailable
   }
 
-  return collected;
+  if (rawText) {
+    // 1. Попытка разобрать как JSON
+    if (rawText.startsWith("{") || rawText.startsWith("[")) {
+      try {
+        const json = JSON.parse(rawText);
+        flattenJsonIntoParams(json, collected);
+      } catch {
+        // не JSON
+      }
+    }
+
+    // 2. Попытка разобрать как URL-encoded / multipart form
+    if (rawText.includes("=")) {
+      try {
+        const sp = new URLSearchParams(rawText);
+        sp.forEach((value, key) => {
+          if (value && !collected[key]) {
+            collected[key] = value.trim();
+          }
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return {
+    params: collected,
+    rawBody: rawText ? rawText.slice(0, 1000) : undefined,
+  };
 }
 
 export async function getDefaultWhatsappInstanceForCallo() {
@@ -259,7 +281,7 @@ export async function saveLastCalloWebhookDebug(
 
 export async function processCalloLeadWebhook(
   rawParams: Record<string, string>,
-  options?: { instanceId?: string; isTest?: boolean; method?: string }
+  options?: { instanceId?: string; isTest?: boolean; method?: string; rawBody?: string }
 ) {
   const phoneInput = normalizeCalloPhoneInput(rawParams);
   const callId = pickParam(rawParams, ["ct_call_id", "call_id", "callId", "id"]);
@@ -272,6 +294,12 @@ export async function processCalloLeadWebhook(
   const transcribing = pickParam(rawParams, ["ct_transcribing", "transcribing"]);
   const clientName = pickParam(rawParams, ["ct_name", "name", "client_name"]);
   const rawSummary = summarizeCalloParams(rawParams);
+  const effectiveSummary =
+    rawSummary !== "(пустой запрос без параметров)"
+      ? rawSummary
+      : options?.rawBody
+      ? `raw: ${options.rawBody.slice(0, 300)}`
+      : rawSummary;
 
   const instanceId =
     options?.instanceId || (await getDefaultWhatsappInstanceForCallo())?.id;
@@ -290,7 +318,7 @@ export async function processCalloLeadWebhook(
       note: options?.isTest
         ? "Не передан корректный номер телефона (ct_phone)"
         : "Входящий запрос/пинг без номера телефона (принят HTTP 200)",
-      rawSummary,
+      rawSummary: effectiveSummary,
     });
 
     if (options?.isTest) {
@@ -463,6 +491,17 @@ export async function processCalloLeadWebhook(
 
     if (existingOpenDeal) {
       dealId = existingOpenDeal.id;
+      // Если у контакта уже была открытая сделка, перемещаем её на этап «Неразобранные»,
+      // чтобы новый отклик сразу появился в начале воронки для распределения
+      if (existingOpenDeal.stageId !== targetStage.id) {
+        await prisma.deal.update({
+          where: { id: existingOpenDeal.id },
+          data: {
+            stageId: targetStage.id,
+            updatedAt: new Date(),
+          },
+        });
+      }
     } else {
       const newDeal = await prisma.deal.create({
         data: {

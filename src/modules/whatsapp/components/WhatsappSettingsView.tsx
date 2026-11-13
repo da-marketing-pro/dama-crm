@@ -900,12 +900,18 @@ export function WhatsappSettingsView({
                   </button>
                 </div>
 
-                <ul className="text-[11px] text-slate-600 space-y-1 list-disc list-inside leading-relaxed">
+                <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed">
                   <li>
                     В Callo откройте сценарий <strong>«Нажатие цифры 1» → «Отправить вебхук»</strong>.
                   </li>
                   <li>
-                    Метод: подойдет и <strong>GET</strong>, и <strong>POST</strong> (CRM принимает оба варианта и все параметры <code>ct_phone</code>, <code>ct_call_id</code>, <code>ct_button_num</code>).
+                    Метод: подойдет и <strong>POST</strong>, и <strong>GET</strong> (CRM автоматически принимает оба варианта и любые параметры телефона).
+                  </li>
+                  <li>
+                    В Callo в поле URL можно вставить как прямую ссылку выше, так и вариант с явной подстановкой макросов Callo:
+                    <div className="mt-1 p-1.5 rounded-lg bg-slate-100 border border-slate-200/80 font-mono text-[10px] text-slate-700 break-all select-all">
+                      {calloWebhookUrl}?phone={"{ct_phone}"}&call_id={"{ct_call_id}"}&button={"{ct_button_num}"}
+                    </div>
                   </li>
                   <li>
                     Рекомендуем отметить галочку <strong>«Отправлять вебхук сразу при срабатывании, не дожидаясь окончания звонка»</strong> — лид придет мгновенно.

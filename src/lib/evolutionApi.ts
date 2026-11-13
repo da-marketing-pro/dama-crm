@@ -729,10 +729,28 @@ export async function sendEvolutionMessage(params: {
   textContent?: string;
   mediaUrl?: string;
   fileName?: string;
+  customDelayMs?: number;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { apiUrl, apiKey, instanceName, to, messageType, textContent, mediaUrl, fileName } = params;
+  const { apiUrl, apiKey, instanceName, to, messageType, textContent, mediaUrl, fileName, customDelayMs } = params;
   const number = formatNumberForEvolution(to);
   const encodedInstance = encodeURIComponent(instanceName);
+
+  // Антиспам-защита: рандомизированная имитация набора текста человеком (1800-3200 мс)
+  // Для WhatsApp сокетов это эмулирует статус "печатает..." и предотвращает флаг скрипт-бота
+  const typingDelay =
+    typeof customDelayMs === "number" && customDelayMs >= 0
+      ? customDelayMs
+      : Math.floor(Math.random() * 1400) + 1800;
+
+  // Отправляем явный presence-сигнал набора текста или аудиозаписи
+  evoFetch(apiUrl, apiKey, `/chat/sendPresence/${encodedInstance}`, {
+    method: "POST",
+    body: JSON.stringify({
+      number,
+      presence: messageType === WhatsappMessageType.AUDIO ? "recording" : "composing",
+      delay: typingDelay,
+    }),
+  }).catch(() => null);
 
   if (messageType === WhatsappMessageType.TEXT) {
     const res = await evoFetch(apiUrl, apiKey, `/message/sendText/${encodedInstance}`, {
@@ -740,6 +758,8 @@ export async function sendEvolutionMessage(params: {
       body: JSON.stringify({
         number,
         text: textContent || "",
+        delay: typingDelay,
+        linkPreview: false,
       }),
     });
     return { ok: res.ok, error: res.error };
@@ -756,6 +776,7 @@ export async function sendEvolutionMessage(params: {
       body: JSON.stringify({
         number,
         audio: mediaValue,
+        delay: typingDelay,
       }),
     });
 
@@ -770,6 +791,7 @@ export async function sendEvolutionMessage(params: {
         mimetype,
         media: mediaValue,
         fileName: fileName || "voice-message.webm",
+        delay: typingDelay,
       }),
     });
     return { ok: fallbackRes.ok, error: fallbackRes.ok ? undefined : res.error || fallbackRes.error };
@@ -790,6 +812,7 @@ export async function sendEvolutionMessage(params: {
       caption: textContent || "",
       media: mediaValue,
       fileName: fileName || (isImage ? "image.jpg" : "document.pdf"),
+      delay: typingDelay,
     }),
   });
 
