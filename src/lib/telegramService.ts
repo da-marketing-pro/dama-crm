@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getTelegramAppUrl } from "./telegramAuth";
 
 const MONTH_NAMES_RU = [
   "января",
@@ -28,7 +29,8 @@ const WEEKDAY_NAMES_RU = [
 export async function sendTelegramMessage(
   botToken: string,
   chatId: string,
-  text: string
+  text: string,
+  replyMarkup?: unknown
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const cleanToken = botToken.trim();
@@ -38,15 +40,21 @@ export async function sendTelegramMessage(
       return { success: false, error: "Не указан Telegram Bot Token или Chat ID" };
     }
 
+    const payload: Record<string, unknown> = {
+      chat_id: cleanChatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    };
+
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+
     const response = await fetch(`https://api.telegram.org/bot${cleanToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: cleanChatId,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      }),
+      body: JSON.stringify(payload),
     });
 
     const data = await response.json();
@@ -64,10 +72,56 @@ export async function sendTelegramMessage(
   }
 }
 
+export async function setupTelegramBotWebhook(botToken: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const cleanToken = botToken.trim();
+    if (!cleanToken) return { success: false, error: "Токен не указан" };
+
+    const webhookUrl = "https://crm.da-marketing.pro/api/webhooks/telegram";
+    const appUrl = "https://crm.da-marketing.pro/api/auth/tg-login?auto=1";
+
+    // 1. Установка вебхука
+    await fetch(`https://api.telegram.org/bot${cleanToken}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl, drop_pending_updates: false }),
+    });
+
+    // 2. Установка постоянной кнопки меню "📱 CRM" (Telegram Web App Mini App)
+    await fetch(`https://api.telegram.org/bot${cleanToken}/setChatMenuButton`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        menu_button: {
+          type: "web_app",
+          text: "📱 CRM",
+          web_app: { url: appUrl },
+        },
+      }),
+    });
+
+    // 3. Установка подсказок команд бота
+    await fetch(`https://api.telegram.org/bot${cleanToken}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commands: [
+          { command: "tasks", description: "Сводка задач на сегодня" },
+          { command: "deals", description: "Активные сделки и контакты" },
+          { command: "crm", description: "Открыть CRM Mini App" },
+        ],
+      }),
+    });
+
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка настройки бота" };
+  }
+}
+
 export function getLocalTodayInfo(targetDate: Date = new Date()) {
-  // Вычисляем смещение для UTC+5 (Казахстан: Астана/Алматы)
   const utc = targetDate.getTime() + targetDate.getTimezoneOffset() * 60000;
-  const tzOffsetHours = 5;
+  const tzOffsetHours = 5; // UTC+5 Казахстан
   const localDate = new Date(utc + 3600000 * tzOffsetHours);
 
   const year = localDate.getFullYear();
@@ -128,66 +182,98 @@ export async function sendDailyTasksDigest(options: { force?: boolean } = {}): P
     });
 
     let messageText = "";
+    let replyMarkup: unknown = undefined;
 
     // По требованию: "Если задач нет, то в сообщение просто приходит 'нет задач на сегодня'"
     if (tasks.length === 0) {
       messageText = "нет задач на сегодня";
+      // Даже если нет задач, добавим кнопку для открытия CRM Mini App
+      const crmUrl = await getTelegramAppUrl({ redirect: "/tasks" });
+      replyMarkup = {
+        inline_keyboard: [
+          [{ text: "📱 Открыть CRM (Mini App)", web_app: { url: crmUrl } }],
+        ],
+      };
     } else {
       const dayName = WEEKDAY_NAMES_RU[dayOfWeek];
       const monthName = MONTH_NAMES_RU[localDate.getMonth()];
       const dayNum = localDate.getDate();
 
-      const taskLines = tasks.map((t, idx) => {
-        const taskDate = new Date(t.dueDate);
-        const hours = String(taskDate.getHours()).padStart(2, "0");
-        const minutes = String(taskDate.getMinutes()).padStart(2, "0");
-        const hasTime = !(hours === "00" && minutes === "00");
-        const timeStr = hasTime ? `${hours}:${minutes}` : "В течение дня";
+      const inlineKeyboard: Array<Array<{ text: string; web_app: { url: string } }>> = [];
 
-        let typeIcon = "📌";
-        let typeName = "Задача";
-        switch (t.taskType) {
-          case "CALL":
-            typeIcon = "📞";
-            typeName = "Связаться / Созвон";
-            break;
-          case "MEETING":
-            typeIcon = "🤝";
-            typeName = "Встреча / Разбор";
-            break;
-          case "OFFER":
-            typeIcon = "📄";
-            typeName = "Отправить КП";
-            break;
-          case "PAYMENT":
-            typeIcon = "💳";
-            typeName = "Контроль оплаты";
-            break;
-          case "MESSAGE":
-            typeIcon = "💬";
-            typeName = "WhatsApp";
-            break;
-        }
+      const taskLines = await Promise.all(
+        tasks.map(async (t, idx) => {
+          const taskDate = new Date(t.dueDate);
+          const hours = String(taskDate.getHours()).padStart(2, "0");
+          const minutes = String(taskDate.getMinutes()).padStart(2, "0");
+          const hasTime = !(hours === "00" && minutes === "00");
+          const timeStr = hasTime ? `${hours}:${minutes}` : "В течение дня";
 
-        const contactPart = t.contact?.name
-          ? `\n   👤 <b>Клиент:</b> ${t.contact.name}${t.contact.company ? ` (${t.contact.company})` : ""}${t.contact.phone ? ` • ${t.contact.phone}` : ""}`
-          : "";
+          let typeIcon = "📌";
+          let typeName = "Задача";
+          switch (t.taskType) {
+            case "CALL":
+              typeIcon = "📞";
+              typeName = "Связаться / Созвон";
+              break;
+            case "MEETING":
+              typeIcon = "🤝";
+              typeName = "Встреча / Разбор";
+              break;
+            case "OFFER":
+              typeIcon = "📄";
+              typeName = "Отправить КП";
+              break;
+            case "PAYMENT":
+              typeIcon = "💳";
+              typeName = "Контроль оплаты";
+              break;
+            case "MESSAGE":
+              typeIcon = "💬";
+              typeName = "WhatsApp";
+              break;
+          }
 
-        const dealPart = t.deal?.title
-          ? `\n   💼 <b>Сделка:</b> ${t.deal.title}`
-          : "";
+          const contactPart = t.contact?.name
+            ? `\n   👤 <b>Клиент:</b> ${t.contact.name}${t.contact.company ? ` (${t.contact.company})` : ""}${t.contact.phone ? ` • <code>${t.contact.phone}</code>` : ""}`
+            : "";
 
-        const assignedPart = t.assignedTo?.name
-          ? `\n   👨‍💼 <b>Отв-ный:</b> ${t.assignedTo.name}`
-          : "";
+          const dealPart = t.deal?.title
+            ? `\n   💼 <b>Сделка:</b> ${t.deal.title}`
+            : "";
 
-        return `${idx + 1}. ${typeIcon} <b>${typeName}: ${t.title}</b>\n   ⏰ <b>Время:</b> ${timeStr}${contactPart}${dealPart}${assignedPart}`;
-      });
+          const assignedPart = t.assignedTo?.name
+            ? `\n   👨‍💼 <b>Отв-ный:</b> ${t.assignedTo.name}`
+            : "";
 
-      messageText = `📋 <b>DAMA CRM: Сводка задач на сегодня</b>\n<i>${dayName}, ${dayNum} ${monthName} ${localDate.getFullYear()} г.</i>\n\n${taskLines.join("\n\n")}\n\n━━━━━━━━━━━━━━━━━━━━\nВсего задач: <b>${tasks.length}</b> • <a href="https://crm.da-marketing.pro/tasks">Открыть задачи в CRM</a>`;
+          // Если у задачи есть привязанная сделка — формируем кнопку Mini App
+          if (t.deal?.id) {
+            const dealAppUrl = await getTelegramAppUrl({ dealId: t.deal.id });
+            const shortDealTitle = t.deal.title.length > 25 ? `${t.deal.title.slice(0, 25)}...` : t.deal.title;
+            inlineKeyboard.push([
+              {
+                text: `💼 ${idx + 1}. Открыть: ${shortDealTitle}`,
+                web_app: { url: dealAppUrl },
+              },
+            ]);
+          }
+
+          return `${idx + 1}. ${typeIcon} <b>${typeName}: ${t.title}</b>\n   ⏰ <b>Время:</b> ${timeStr}${contactPart}${dealPart}${assignedPart}`;
+        })
+      );
+
+      // Общая кнопка открытия раздела задач в Mini App
+      const allTasksAppUrl = await getTelegramAppUrl({ redirect: "/tasks" });
+      inlineKeyboard.push([
+        { text: "📱 Все задачи в Mini App", web_app: { url: allTasksAppUrl } },
+      ]);
+
+      replyMarkup = { inline_keyboard: inlineKeyboard };
+
+      messageText = `📋 <b>DAMA CRM: Сводка задач на сегодня</b>\n<i>${dayName}, ${dayNum} ${monthName} ${localDate.getFullYear()} г.</i>\n\n${taskLines.join("\n\n")}\n\n━━━━━━━━━━━━━━━━━━━━\nВсего задач: <b>${tasks.length}</b> • <i>Нажмите кнопку ниже для открытия сделки в Telegram Mini App</i>`;
     }
 
-    const sendRes = await sendTelegramMessage(setting.botToken, setting.chatId, messageText);
+    const sendRes = await sendTelegramMessage(setting.botToken, setting.chatId, messageText, replyMarkup);
     if (!sendRes.success) {
       return { success: false, error: sendRes.error };
     }

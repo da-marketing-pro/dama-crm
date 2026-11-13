@@ -17,7 +17,7 @@ import {
 } from "../actions";
 import { addPayment, deletePayment } from "@/modules/payments/actions";
 import { createTask, completeTask } from "@/modules/tasks/actions";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { buildDealSourceOptions } from "@/lib/dealSource";
 import { Currency, StageType } from "@prisma/client";
 import { EmbeddedWhatsappChat } from "@/modules/whatsapp/components/EmbeddedWhatsappChat";
@@ -97,6 +97,9 @@ export function DealDrawer({
 
   // Active Tab on left side: Основное | Статистика | Файлы
   const [leftTab, setLeftTab] = useState<"general" | "stats" | "files">("general");
+
+  // Mobile Active Column Switcher: "left" (Deal & Contact) vs "right" (Feed, Tasks, Chat)
+  const [mobileActiveTab, setMobileActiveTab] = useState<"left" | "right">("left");
 
   // Right column view: feed or full WhatsApp
   const [rightView, setRightView] = useState<"feed" | "whatsapp">("feed");
@@ -606,10 +609,43 @@ export function DealDrawer({
           </div>
         )}
 
+        {/* Mobile View Switcher (md:hidden) */}
+        <div className="md:hidden flex items-center bg-[#122232] border-b border-[#1b324d] px-3 py-2 shrink-0">
+          <div className="grid grid-cols-2 w-full bg-[#162838] p-1 rounded-xl text-xs font-bold border border-[#223c56]">
+            <button
+              type="button"
+              onClick={() => setMobileActiveTab("left")}
+              className={`py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer ${
+                mobileActiveTab === "left"
+                  ? "bg-[#2e70e9] text-white shadow-sm font-bold"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              📋 Данные сделки
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileActiveTab("right")}
+              className={`py-1.5 px-2 rounded-lg text-center transition-all cursor-pointer ${
+                mobileActiveTab === "right"
+                  ? "bg-[#2e70e9] text-white shadow-sm font-bold"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              💬 История и чат
+            </button>
+          </div>
+        </div>
+
         {/* ================= 2-COLUMN MAIN BODY ================= */}
-        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-12 divide-y md:divide-y-0 md:divide-x divide-[#1b324d]">
+        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-12 md:divide-x divide-[#1b324d]">
           {/* ================= LEFT COLUMN (5/12): AmoCRM Fields & Contact ================= */}
-          <div className="md:col-span-5 flex flex-col h-full overflow-hidden bg-[#0f1d2b]">
+          <div
+            className={cn(
+              "md:col-span-5 flex-col h-full overflow-hidden bg-[#0f1d2b]",
+              mobileActiveTab === "left" ? "flex" : "hidden md:flex"
+            )}
+          >
             {/* Tabs: Основное | Статистика | Файлы | Настроить */}
             <div className="px-5 pt-3 pb-2 border-b border-[#1b324d] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-4 text-xs font-semibold">
@@ -987,21 +1023,38 @@ export function DealDrawer({
                     {/* Раб. тел. */}
                     <div className="grid grid-cols-12 gap-2 items-center text-xs">
                       <span className="col-span-5 text-slate-400 font-medium">Раб. тел.</span>
-                      <div className="col-span-7 flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setRightView("whatsapp")}
-                          title="Открыть диалог в WhatsApp"
-                          className="p-1.5 rounded bg-emerald-950/70 border border-emerald-800/60 text-emerald-400 hover:bg-emerald-900/80 transition-colors cursor-pointer"
-                        >
-                          <MessageCircle className="w-3.5 h-3.5" />
-                        </button>
+                      <div className="col-span-7 flex items-center gap-1.5">
+                        {contactPhone && (
+                          <>
+                            {/* Call button */}
+                            <a
+                              href={`tel:${contactPhone.replace(/\s+/g, "")}`}
+                              title="Позвонить контакту"
+                              className="p-1.5 rounded bg-blue-950/80 border border-blue-800/60 text-blue-400 hover:bg-blue-900 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                            </a>
+
+                            {/* WhatsApp open button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRightView("whatsapp");
+                                setMobileActiveTab("right");
+                              }}
+                              title="Открыть диалог в WhatsApp"
+                              className="p-1.5 rounded bg-emerald-950/70 border border-emerald-800/60 text-emerald-400 hover:bg-emerald-900/80 transition-colors cursor-pointer flex items-center justify-center shrink-0"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                         <input
                           type="text"
                           value={contactPhone}
                           onChange={(e) => setContactPhone(e.target.value)}
                           placeholder="+7..."
-                          className="flex-1 bg-[#162838] border border-[#223c56] text-blue-400 font-medium text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
+                          className="flex-1 min-w-0 bg-[#162838] border border-[#223c56] text-blue-400 font-medium text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
                         />
                       </div>
                     </div>
@@ -1164,7 +1217,12 @@ export function DealDrawer({
           </div>
 
           {/* ================= RIGHT COLUMN (7/12): AmoCRM Feed & Composer OR WhatsApp ================= */}
-          <div className="md:col-span-7 flex flex-col h-full overflow-hidden bg-[#0a1520]">
+          <div
+            className={cn(
+              "md:col-span-7 flex-col h-full overflow-hidden bg-[#0a1520]",
+              mobileActiveTab === "right" ? "flex" : "hidden md:flex"
+            )}
+          >
             {/* Top Toolbar on Right Column */}
             <div className="h-12 px-5 bg-[#0d1b2a] border-b border-[#1b324d] flex items-center justify-between shrink-0">
               {/* Search & Filter */}

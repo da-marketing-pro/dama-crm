@@ -5,6 +5,7 @@ import {
   getTelegramSettingAction,
   saveTelegramSettingAction,
   testSendTelegramDigestAction,
+  syncTelegramWebhookAction,
 } from "../telegramActions";
 import {
   Send,
@@ -15,6 +16,8 @@ import {
   Shield,
   MessageSquare,
   Bot,
+  Smartphone,
+  RefreshCw,
 } from "lucide-react";
 
 export function TelegramManager() {
@@ -27,6 +30,7 @@ export function TelegramManager() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -89,6 +93,24 @@ export function TelegramManager() {
         success: false,
         message: res.error || (res.skipped === "DISABLED_OR_NOT_CONFIGURED" ? "Интеграция не включена или не заполнены Bot Token и Chat ID" : "Ошибка отправки"),
       });
+    }
+  };
+
+  const handleSyncWebhook = async () => {
+    setIsSyncing(true);
+    setTestResult(null);
+    setErrorMessage(null);
+
+    const res = await syncTelegramWebhookAction();
+    setIsSyncing(false);
+
+    if (res.success) {
+      setTestResult({
+        success: true,
+        message: "Telegram Webhook и меню Mini App успешно синхронизированы! Кнопка «📱 CRM» активна в боте.",
+      });
+    } else {
+      setErrorMessage(res.error || "Ошибка синхронизации вебхука");
     }
   };
 
@@ -235,6 +257,29 @@ export function TelegramManager() {
                 className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 bg-white font-bold"
               />
             </div>
+          </div>
+
+          {/* Telegram Mini App & Webhook status banner */}
+          <div className="p-4 bg-sky-50/70 border border-sky-200 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-4 h-4 text-sky-600" />
+                <span className="text-xs font-bold text-sky-950">Telegram Mini App CRM</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSyncWebhook}
+                disabled={isSyncing || (!hasToken && !botToken)}
+                className="text-[11px] font-semibold px-2.5 py-1 bg-white hover:bg-sky-100/60 border border-sky-300 text-sky-700 rounded-lg transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                title="Обновить вебхук и привязать кнопку «📱 CRM» в Telegram"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncing ? "animate-spin" : ""}`} />
+                <span>{isSyncing ? "Синхронизация..." : "Синхронизировать меню бота"}</span>
+              </button>
+            </div>
+            <p className="text-[11px] text-sky-800 leading-relaxed">
+              В Telegram встроена полноценная мобильная версия DAMA CRM. В утренней сводке к каждой задаче прикреплена кнопка <b>«💼 Открыть сделку»</b> с автоматической авторизацией. Внизу чата доступна постоянная кнопка <b>«📱 CRM»</b>.
+            </p>
           </div>
 
           {/* Action buttons */}

@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { DollarSign, Shield, UserCheck, Clock, Bell } from "lucide-react";
+import { DollarSign, Shield, UserCheck, Clock, Bell, Menu } from "lucide-react";
 import { useTaskAlerts } from "@/contexts/TaskAlertsContext";
+import { useMobileNav } from "@/contexts/MobileNavContext";
 
 interface HeaderProps {
   title?: string;
@@ -18,6 +19,7 @@ interface HeaderProps {
 export function Header({ title = "DAMA CRM", subtitle, currencyRates }: HeaderProps) {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "ADMIN";
+  const { toggleMobileMenu } = useMobileNav();
   const {
     upcoming30MinTask,
     upcoming30MinLabel,
@@ -26,11 +28,21 @@ export function Header({ title = "DAMA CRM", subtitle, currencyRates }: HeaderPr
   } = useTaskAlerts();
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-20 flex items-center justify-between px-6 shadow-sm">
-      <div className="flex items-center gap-4 min-w-0">
+    <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-20 flex items-center justify-between px-4 sm:px-6 shadow-sm">
+      <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+        {/* Mobile Hamburger Menu Toggle */}
+        <button
+          type="button"
+          onClick={toggleMobileMenu}
+          className="md:hidden p-2 -ml-1 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+          aria-label="Открыть меню"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
         <div className="shrink-0">
-          <h1 className="text-lg font-bold text-slate-800 leading-tight">{title}</h1>
-          {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
+          <h1 className="text-base sm:text-lg font-bold text-slate-800 leading-tight">{title}</h1>
+          {subtitle && <p className="text-[11px] sm:text-xs text-slate-500">{subtitle}</p>}
         </div>
 
         {/* 2a: Small Banner for tasks within 30 minutes */}

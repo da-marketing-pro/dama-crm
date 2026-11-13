@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DealItem, PipelineWithStages, DealCustomFieldDef } from "../types";
 import { DealsKanban } from "./DealsKanban";
 import { CreateDealModal } from "./CreateDealModal";
@@ -8,7 +8,7 @@ import { PipelineSettingsModal } from "./PipelineSettingsModal";
 import { DealDrawer } from "./DealDrawer";
 import { createPipeline } from "../actions";
 import { formatCurrency } from "@/lib/utils";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   KanbanSquare,
   Plus,
@@ -31,6 +31,7 @@ interface DealsViewProps {
   initialFieldDefinitions?: DealCustomFieldDef[];
   currencyRateUsd?: number;
   currencyRateRub?: number;
+  initialDealId?: string;
 }
 
 export function DealsView({
@@ -42,19 +43,49 @@ export function DealsView({
   initialFieldDefinitions,
   currencyRateUsd = 495,
   currencyRateRub = 5.2,
+  initialDealId,
 }: DealsViewProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Find initial deal if initialDealId or URL searchParams is provided
+  const targetDealIdFromUrl = searchParams?.get("dealId") || initialDealId;
+  const initialTargetDeal = targetDealIdFromUrl
+    ? pipelines
+        .flatMap((p) => p.stages)
+        .flatMap((s) => s.deals)
+        .find((d) => d.id === targetDealIdFromUrl) || null
+    : null;
 
   // Active pipeline selector
   const [activePipelineId, setActivePipelineId] = useState<string>(
-    pipelines[0]?.id || ""
+    initialTargetDeal?.pipelineId || pipelines[0]?.id || ""
   );
 
   // Modals state
-  const [selectedDeal, setSelectedDeal] = useState<DealItem | null>(null);
+  const [selectedDeal, setSelectedDeal] = useState<DealItem | null>(
+    initialTargetDeal
+  );
   const [isCreateDealOpen, setIsCreateDealOpen] = useState(false);
   const [createDealDefaultStageId, setCreateDealDefaultStageId] = useState<string | undefined>(undefined);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Auto-open deal if URL searchParams change
+  useEffect(() => {
+    const dealId = searchParams?.get("dealId") || initialDealId;
+    if (dealId) {
+      for (const p of pipelines) {
+        for (const s of p.stages) {
+          const found = s.deals.find((d) => d.id === dealId);
+          if (found) {
+            setActivePipelineId(p.id);
+            setSelectedDeal(found);
+            return;
+          }
+        }
+      }
+    }
+  }, [searchParams, initialDealId, pipelines]);
 
   // New pipeline prompt
   const [isAddingPipeline, setIsAddingPipeline] = useState(false);

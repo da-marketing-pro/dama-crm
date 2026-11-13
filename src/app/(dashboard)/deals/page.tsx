@@ -27,7 +27,11 @@ function parseFieldOptions(raw: unknown): string[] {
   return [];
 }
 
-export default async function DealsPage() {
+export default async function DealsPage({
+  searchParams,
+}: {
+  searchParams?: { dealId?: string };
+}) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     redirect("/login");
@@ -203,6 +207,7 @@ export default async function DealsPage() {
       initialFieldDefinitions={initialFieldDefs}
       currencyRateUsd={currencySetting?.rateUsd || 495.0}
       currencyRateRub={currencySetting?.rateRub || 5.2}
+      initialDealId={searchParams?.dealId}
     />
   );
 }

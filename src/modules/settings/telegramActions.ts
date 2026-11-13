@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { sendTelegramMessage, sendDailyTasksDigest } from "@/lib/telegramService";
+import { sendTelegramMessage, sendDailyTasksDigest, setupTelegramBotWebhook } from "@/lib/telegramService";
 
 async function getAdminUser() {
   const session = await getServerSession(authOptions);
@@ -92,10 +92,35 @@ export async function saveTelegramSettingAction(data: {
       });
     }
 
+    // Automatically configure webhook & Mini App menu button in Telegram
+    const effectiveToken = updateData.botToken || existing?.botToken;
+    if (effectiveToken) {
+      try {
+        await setupTelegramBotWebhook(effectiveToken);
+      } catch (e) {
+        console.warn("Failed to auto-setup telegram webhook:", e);
+      }
+    }
+
     revalidatePath("/settings");
     return { success: true };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка сохранения настроек Telegram";
+    return { success: false, error: message };
+  }
+}
+
+export async function syncTelegramWebhookAction() {
+  try {
+    await getAdminUser();
+    const setting = await prisma.telegramSetting.findFirst();
+    if (!setting || !setting.botToken) {
+      return { success: false, error: "Bot Token не задан. Сначала укажите и сохраните токен бота." };
+    }
+    const res = await setupTelegramBotWebhook(setting.botToken);
+    return res;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка синхронизации Telegram Webhook";
     return { success: false, error: message };
   }
 }

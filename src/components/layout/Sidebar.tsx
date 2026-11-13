@@ -18,11 +18,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTaskAlerts } from "@/contexts/TaskAlertsContext";
+import { useMobileNav } from "@/contexts/MobileNavContext";
+import { X } from "lucide-react";
 
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const { overdueCount, hasUpcoming15MinTask } = useTaskAlerts();
+  const { isMobileMenuOpen, closeMobileMenu } = useMobileNav();
 
   const user = session?.user;
   const isAdmin = user?.role === "ADMIN";
@@ -68,21 +71,47 @@ export function Sidebar() {
   ];
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-64 bg-[#1E222D] text-slate-300 flex flex-col z-30 select-none shadow-xl border-r border-[#2C3242]">
-      {/* Logo & App Header */}
-      <div className="h-16 flex items-center px-4 gap-3 border-b border-[#2C3242]">
-        <img
-          src="/logo.png"
-          alt="DAMA CRM"
-          width={40}
-          height={40}
-          className="w-10 h-10 rounded-xl object-contain bg-[#FAF9F5] shadow-md border border-white/10 p-0.5 shrink-0"
+    <>
+      {/* Mobile Backdrop */}
+      {isMobileMenuOpen && (
+        <div
+          onClick={closeMobileMenu}
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 md:hidden animate-in fade-in"
         />
-        <div className="min-w-0">
-          <div className="font-bold text-sm text-white tracking-wide truncate">DAMA CRM</div>
-          <div className="text-[11px] text-slate-400 font-medium truncate">Корпоративная система</div>
+      )}
+
+      {/* Sidebar (Fixed on desktop, Slide-out drawer on mobile) */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 w-64 bg-[#1E222D] text-slate-300 flex flex-col z-50 select-none shadow-xl border-r border-[#2C3242] transition-transform duration-200 ease-in-out md:translate-x-0",
+          isMobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        )}
+      >
+        {/* Logo & App Header */}
+        <div className="h-16 flex items-center justify-between px-4 border-b border-[#2C3242]">
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src="/logo.png"
+              alt="DAMA CRM"
+              width={40}
+              height={40}
+              className="w-10 h-10 rounded-xl object-contain bg-[#FAF9F5] shadow-md border border-white/10 p-0.5 shrink-0"
+            />
+            <div className="min-w-0">
+              <div className="font-bold text-sm text-white tracking-wide truncate">DAMA CRM</div>
+              <div className="text-[11px] text-slate-400 font-medium truncate">Корпоративная система</div>
+            </div>
+          </div>
+
+          {/* Close button on mobile */}
+          <button
+            type="button"
+            onClick={closeMobileMenu}
+            className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#2C3242] transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-      </div>
 
       {/* Navigation Menu */}
       <div className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
@@ -183,5 +212,6 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+    </>
   );
 }
