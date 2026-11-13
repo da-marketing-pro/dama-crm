@@ -45,3 +45,29 @@ dialog::backdrop {
   background-color: rgba(15, 23, 42, 0.5);
   backdrop-filter: blur(2px);
 }
+
+/* Visible, ergonomic horizontal scrollbar for kanban board */
+.kanban-scroll-area {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #e2e8f0;
+  overscroll-behavior-x: contain;
+}
+
+.kanban-scroll-area::-webkit-scrollbar {
+  height: 9px;
+}
+
+.kanban-scroll-area::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 9999px;
+}
+
+.kanban-scroll-area::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 9999px;
+  border: 2px solid #e2e8f0;
+}
+
+.kanban-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}

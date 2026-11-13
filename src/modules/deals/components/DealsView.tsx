@@ -51,6 +51,7 @@ export function DealsView({
   // Modals state
   const [selectedDeal, setSelectedDeal] = useState<DealItem | null>(null);
   const [isCreateDealOpen, setIsCreateDealOpen] = useState(false);
+  const [createDealDefaultStageId, setCreateDealDefaultStageId] = useState<string | undefined>(undefined);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // New pipeline prompt
@@ -95,9 +96,9 @@ export function DealsView({
   }, 0);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 w-full min-w-0 max-w-full">
       {/* Top Header Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         {/* Left: Pipeline Switcher */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
@@ -147,17 +148,6 @@ export function DealsView({
             </button>
           )}
         </div>
-
-        {/* Right: Actions */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsCreateDealOpen(true)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>+ Новая сделка</span>
-          </button>
-        </div>
       </div>
 
       {/* Inline Create Pipeline Form (Admin only) */}
@@ -193,7 +183,7 @@ export function DealsView({
       )}
 
       {/* KPI Stats Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 min-w-0">
         <div className="p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs flex items-center justify-between">
           <div>
             <span className="text-[10px] uppercase font-bold text-slate-400">
@@ -222,7 +212,7 @@ export function DealsView({
           </div>
         </div>
 
-        <div className="col-span-2 sm:col-span-1 p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs flex items-center justify-between">
+        <div className="col-span-1 sm:col-span-2 lg:col-span-1 p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs flex items-center justify-between">
           <div>
             <span className="text-[10px] uppercase font-bold text-slate-400">
               Сделок в пайплайне
@@ -237,12 +227,31 @@ export function DealsView({
         </div>
       </div>
 
+      {/* Action Strip: "Новая сделка" placed on the left between the Budget widget and the First Stage */}
+      <div className="flex items-center justify-start pt-1">
+        <button
+          type="button"
+          onClick={() => {
+            setCreateDealDefaultStageId(undefined);
+            setIsCreateDealOpen(true);
+          }}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm shadow-blue-500/20 transition-all cursor-pointer"
+        >
+          <Plus className="w-4 h-4" />
+          <span>+ Новая сделка</span>
+        </button>
+      </div>
+
       {/* Kanban Board */}
       {activePipeline && (
         <DealsKanban
           stages={activePipeline.stages}
           pipelines={pipelines.map((p) => ({ id: p.id, name: p.name }))}
           onSelectDeal={(deal) => setSelectedDeal(deal)}
+          onCreateDealAtStage={(stageId) => {
+            setCreateDealDefaultStageId(stageId);
+            setIsCreateDealOpen(true);
+          }}
           onPipelineMoved={() => router.refresh()}
           currencyRateUsd={currencyRateUsd}
           currencyRateRub={currencyRateRub}
@@ -252,13 +261,21 @@ export function DealsView({
       {/* Smart Create Deal Modal */}
       <CreateDealModal
         isOpen={isCreateDealOpen}
-        onClose={() => setIsCreateDealOpen(false)}
+        onClose={() => {
+          setIsCreateDealOpen(false);
+          setCreateDealDefaultStageId(undefined);
+        }}
         pipelines={pipelines}
         defaultPipelineId={activePipelineId}
+        defaultStageId={createDealDefaultStageId}
         users={users}
         currentUserId={currentUserId}
         sourceOptions={sourceOptions}
-        onCreated={() => router.refresh()}
+        onCreated={() => {
+          setIsCreateDealOpen(false);
+          setCreateDealDefaultStageId(undefined);
+          router.refresh();
+        }}
       />
 
       {/* Pipeline Stage Settings Modal (Admin only) */}

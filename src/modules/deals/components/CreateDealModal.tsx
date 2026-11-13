@@ -32,6 +32,7 @@ interface CreateDealModalProps {
   onClose: () => void;
   pipelines: PipelineInfo[];
   defaultPipelineId?: string;
+  defaultStageId?: string;
   users: { id: string; name: string }[];
   currentUserId: string;
   sourceOptions?: string[];
@@ -43,6 +44,7 @@ export function CreateDealModal({
   onClose,
   pipelines,
   defaultPipelineId,
+  defaultStageId,
   users,
   currentUserId,
   sourceOptions,
@@ -51,12 +53,31 @@ export function CreateDealModal({
   const [title, setTitle] = useState("");
   const [pipelineId, setPipelineId] = useState(defaultPipelineId || pipelines[0]?.id || "");
   const [stageId, setStageId] = useState(
-    pipelines.find((p) => p.id === (defaultPipelineId || pipelines[0]?.id))?.stages[0]?.id || ""
+    defaultStageId ||
+      pipelines.find((p) => p.id === (defaultPipelineId || pipelines[0]?.id))?.stages[0]?.id ||
+      ""
   );
   const [budget, setBudget] = useState("");
   const [currency, setCurrency] = useState<Currency>(Currency.KZT);
   const [source, setSource] = useState("");
   const [assignedToId, setAssignedToId] = useState(currentUserId);
+
+  // Sync state when modal opens or target pipeline/stage changes
+  useEffect(() => {
+    if (isOpen) {
+      const activePipe =
+        pipelines.find((p) => p.id === (defaultPipelineId || pipelineId)) || pipelines[0];
+      if (activePipe) {
+        setPipelineId(activePipe.id);
+        if (defaultStageId && activePipe.stages.some((s) => s.id === defaultStageId)) {
+          setStageId(defaultStageId);
+        } else {
+          setStageId(activePipe.stages[0]?.id || "");
+        }
+      }
+      setError(null);
+    }
+  }, [isOpen, defaultPipelineId, defaultStageId, pipelines]);
 
   // Contact fields & duplicate search
   const [contactPhone, setContactPhone] = useState("");
@@ -133,6 +154,13 @@ export function CreateDealModal({
     if (!res.success) {
       setError(res.error || "Ошибка создания сделки");
     } else {
+      setTitle("");
+      setBudget("");
+      setContactPhone("");
+      setContactName("");
+      setContactCompany("");
+      setFoundContact(null);
+      setSource("");
       if (onCreated && res.dealId) onCreated(res.dealId);
       onClose();
     }
