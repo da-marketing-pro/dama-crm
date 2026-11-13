@@ -38,7 +38,7 @@ export default async function DealsPage() {
 
   const dealFilter = isAdmin ? {} : { assignedToId: user.id };
 
-  const [rawPipelines, users, currencySetting, sourceFieldDefs] = await Promise.all([
+  const [rawPipelines, users, currencySetting, allFieldDefs] = await Promise.all([
     prisma.pipeline.findMany({
       orderBy: { order: "asc" },
       include: {
@@ -54,11 +54,22 @@ export default async function DealsPage() {
                     name: true,
                     phone: true,
                     company: true,
+                    email: true,
                     customFields: true,
                     notes: {
-                      select: { content: true },
+                      select: {
+                        id: true,
+                        content: true,
+                        createdAt: true,
+                        author: {
+                          select: {
+                            id: true,
+                            name: true,
+                          },
+                        },
+                      },
                       orderBy: { createdAt: "desc" },
-                      take: 5,
+                      take: 30,
                     },
                   },
                 },
@@ -133,20 +144,26 @@ export default async function DealsPage() {
     }),
     prisma.currencySetting.findFirst(),
     prisma.customFieldDefinition.findMany({
-      where: {
-        name: {
-          contains: "источник",
-          mode: "insensitive",
-        },
-      },
       orderBy: { createdAt: "asc" },
     }),
   ]);
 
+  const sourceFieldDefs = allFieldDefs.filter((def) =>
+    /источник/i.test(def.name)
+  );
   const dbSourceOptions = sourceFieldDefs.flatMap((def) =>
     parseFieldOptions(def.options)
   );
   const sourceOptions = buildDealSourceOptions(dbSourceOptions);
+
+  const initialFieldDefs = allFieldDefs.map((f) => ({
+    id: f.id,
+    entityType: f.entityType as "DEAL" | "CONTACT",
+    name: f.name,
+    fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
+    options: parseFieldOptions(f.options),
+    isRequired: f.isRequired,
+  }));
 
   const pipelines: PipelineWithStages[] = rawPipelines.map((pipeline) => ({
     ...pipeline,
@@ -162,6 +179,15 @@ export default async function DealsPage() {
           name: deal.contact.name,
           phone: deal.contact.phone,
           company: deal.contact.company,
+          email: deal.contact.email,
+          customFields:
+            (deal.contact.customFields as Record<string, unknown> | null) || {},
+          notes: (deal.contact.notes || []).map((n) => ({
+            id: n.id,
+            content: n.content,
+            createdAt: n.createdAt.toISOString(),
+            author: n.author,
+          })),
         },
       })),
     })),
@@ -174,6 +200,7 @@ export default async function DealsPage() {
       currentUserId={user.id}
       users={users}
       sourceOptions={sourceOptions}
+      initialFieldDefinitions={initialFieldDefs}
       currencyRateUsd={currencySetting?.rateUsd || 495.0}
       currencyRateRub={currencySetting?.rateRub || 5.2}
     />

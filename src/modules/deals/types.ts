@@ -24,6 +24,25 @@ export interface PaymentItem {
   comment?: string | null;
 }
 
+export interface DealNoteItem {
+  id: string;
+  content: string;
+  createdAt: Date | string;
+  author: {
+    id: string;
+    name: string;
+  };
+}
+
+export interface DealCustomFieldDef {
+  id: string;
+  entityType: "DEAL" | "CONTACT";
+  name: string;
+  fieldType: "TEXT" | "NUMBER" | "DATE" | "SELECT";
+  options?: string[];
+  isRequired?: boolean;
+}
+
 export interface DealItem {
   id: string;
   title: string;
@@ -38,11 +57,15 @@ export interface DealItem {
   pipelineId: string;
   stageId: string;
   assignedToId?: string | null;
+  notes?: DealNoteItem[];
   contact: {
     id: string;
     name: string;
     phone: string;
     company?: string | null;
+    email?: string | null;
+    customFields?: Record<string, unknown> | null;
+    notes?: DealNoteItem[];
   };
   assignedTo?: {
     id: string;

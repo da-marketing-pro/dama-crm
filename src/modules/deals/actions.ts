@@ -3,7 +3,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Currency, Prisma, Role, StageType } from "@prisma/client";
+import { Currency, FieldType, Prisma, Role, StageType } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 
 async function getAuthUser() {
@@ -511,5 +511,409 @@ export async function reorderStages(pipelineId: string, orderedStageIds: string[
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка изменения порядка этапов";
     return { success: false, error: message };
+  }
+}
+
+// 11. Настройка полей amoCRM для сделок и контактов
+const DEFAULT_DEAL_FIELDS = [
+  {
+    name: "Тип маркетинга",
+    fieldType: FieldType.SELECT,
+    options: [
+      "Контекстная реклама",
+      "Таргетированная реклама",
+      "Комплексный маркетинг",
+      "SEO продвижение",
+      "Автообзвон",
+      "Разработка сайтов",
+    ],
+  },
+  {
+    name: "Дата запуска кампании",
+    fieldType: FieldType.DATE,
+    options: [],
+  },
+  {
+    name: "Бюджет кампании",
+    fieldType: FieldType.NUMBER,
+    options: [],
+  },
+  {
+    name: "Тип клиента",
+    fieldType: FieldType.SELECT,
+    options: ["Новый клиент", "Повторный клиент", "Партнер"],
+  },
+  {
+    name: "Требуется согласование",
+    fieldType: FieldType.SELECT,
+    options: ["Да", "Нет"],
+  },
+  {
+    name: "Комментарии менеджера",
+    fieldType: FieldType.TEXT,
+    options: [],
+  },
+  {
+    name: "Источник",
+    fieldType: FieldType.SELECT,
+    options: [
+      "Автообзвон",
+      "WhatsApp",
+      "Таргет (KZ)",
+      "Таргет (Инт)",
+      "Рекомендация",
+      "Сайт",
+      "Не указан",
+    ],
+  },
+];
+
+export async function getDealFieldDefinitionsAction() {
+  try {
+    let dealFields = await prisma.customFieldDefinition.findMany({
+      where: { entityType: "DEAL" },
+      orderBy: { createdAt: "asc" },
+    });
+
+    if (dealFields.length === 0) {
+      for (const df of DEFAULT_DEAL_FIELDS) {
+        await prisma.customFieldDefinition.create({
+          data: {
+            entityType: "DEAL",
+            name: df.name,
+            fieldType: df.fieldType,
+            options: JSON.stringify(df.options),
+            isRequired: false,
+          },
+        });
+      }
+      dealFields = await prisma.customFieldDefinition.findMany({
+        where: { entityType: "DEAL" },
+        orderBy: { createdAt: "asc" },
+      });
+    }
+
+    // Проверяем наличие поля «Должность» у контактов
+    const hasPosition = await prisma.customFieldDefinition.findFirst({
+      where: { entityType: "CONTACT", name: "Должность" },
+    });
+    if (!hasPosition) {
+      await prisma.customFieldDefinition.create({
+        data: {
+          entityType: "CONTACT",
+          name: "Должность",
+          fieldType: FieldType.TEXT,
+          options: "[]",
+          isRequired: false,
+        },
+      });
+    }
+
+    const contactFields = await prisma.customFieldDefinition.findMany({
+      where: { entityType: "CONTACT" },
+      orderBy: { createdAt: "asc" },
+    });
+
+    const parsedDeal = dealFields.map((f) => {
+      let opts: string[] = [];
+      try {
+        opts = typeof f.options === "string" ? JSON.parse(f.options) : (f.options as string[]) || [];
+      } catch {
+        opts = [];
+      }
+      return {
+        id: f.id,
+        entityType: "DEAL" as const,
+        name: f.name,
+        fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
+        options: Array.isArray(opts) ? opts : [],
+        isRequired: f.isRequired,
+      };
+    });
+
+    const parsedContact = contactFields.map((f) => {
+      let opts: string[] = [];
+      try {
+        opts = typeof f.options === "string" ? JSON.parse(f.options) : (f.options as string[]) || [];
+      } catch {
+        opts = [];
+      }
+      return {
+        id: f.id,
+        entityType: "CONTACT" as const,
+        name: f.name,
+        fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
+        options: Array.isArray(opts) ? opts : [],
+        isRequired: f.isRequired,
+      };
+    });
+
+    return {
+      success: true,
+      dealFields: parsedDeal,
+      contactFields: parsedContact,
+    };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Ошибка загрузки настроек полей",
+      dealFields: [],
+      contactFields: [],
+    };
+  }
+}
+
+export async function createDealFieldDefinitionAction(data: {
+  entityType?: "DEAL" | "CONTACT";
+  name: string;
+  fieldType: "TEXT" | "NUMBER" | "DATE" | "SELECT";
+  options?: string[];
+  isRequired?: boolean;
+}) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== Role.ADMIN) {
+      return { success: false, error: "Доступ запрещен: настраивать поля может только Администратор" };
+    }
+    if (!data.name?.trim()) {
+      return { success: false, error: "Укажите название поля" };
+    }
+
+    const field = await prisma.customFieldDefinition.create({
+      data: {
+        entityType: data.entityType || "DEAL",
+        name: data.name.trim(),
+        fieldType: data.fieldType,
+        options: data.options ? JSON.stringify(data.options) : "[]",
+        isRequired: !!data.isRequired,
+      },
+    });
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    return { success: true, fieldId: field.id };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка создания поля" };
+  }
+}
+
+export async function deleteDealFieldDefinitionAction(fieldId: string) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== Role.ADMIN) {
+      return { success: false, error: "Доступ запрещен: удалять поля может только Администратор" };
+    }
+
+    await prisma.customFieldDefinition.delete({
+      where: { id: fieldId },
+    });
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка удаления поля" };
+  }
+}
+
+// 12. Полное обновление сделки и контакта с фиксацией событий в amoCRM ленту
+export async function updateDealFullAction(
+  dealId: string,
+  data: {
+    title?: string;
+    totalBudget?: number;
+    currency?: Currency;
+    pipelineId?: string;
+    stageId?: string;
+    assignedToId?: string;
+    source?: string;
+    customFields?: Record<string, unknown>;
+    contact?: {
+      id: string;
+      name?: string;
+      company?: string | null;
+      phone?: string;
+      email?: string | null;
+      customFields?: Record<string, unknown>;
+    };
+  }
+) {
+  try {
+    const user = await getAuthUser();
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      include: { contact: true, stage: true, pipeline: true },
+    });
+    if (!deal) return { success: false, error: "Сделка не найдена" };
+
+    if (user.role === Role.MANAGER && deal.assignedToId !== user.id) {
+      return { success: false, error: "Доступ ограничен: только для ответственного или администратора" };
+    }
+
+    const dealUpdate: Record<string, unknown> = {};
+    const auditLogs: string[] = [];
+
+    if (data.title && data.title.trim() !== deal.title) {
+      dealUpdate.title = data.title.trim();
+      auditLogs.push(`Для поля «Название» установлено значение «${data.title.trim()}»`);
+    }
+
+    if (data.totalBudget !== undefined && Number(data.totalBudget) !== deal.totalBudget) {
+      dealUpdate.totalBudget = Number(data.totalBudget);
+      auditLogs.push(`Для поля «Бюджет» установлено значение «${data.totalBudget}»`);
+    }
+
+    if (data.currency && data.currency !== deal.currency) {
+      dealUpdate.currency = data.currency;
+    }
+
+    if (data.assignedToId && user.role === Role.ADMIN && data.assignedToId !== deal.assignedToId) {
+      dealUpdate.assignedToId = data.assignedToId;
+      const nextUser = await prisma.user.findUnique({ where: { id: data.assignedToId } });
+      if (nextUser) {
+        auditLogs.push(`Ответственным назначен «${nextUser.name}»`);
+      }
+    }
+
+    // Merge deal custom fields
+    const prevCustom =
+      deal.customFields && typeof deal.customFields === "object" && !Array.isArray(deal.customFields)
+        ? { ...(deal.customFields as Record<string, unknown>) }
+        : {};
+
+    if (data.source !== undefined) {
+      prevCustom.source = data.source.trim();
+    }
+
+    if (data.customFields) {
+      for (const [k, v] of Object.entries(data.customFields)) {
+        const oldVal = prevCustom[k];
+        if (oldVal !== v) {
+          const displayVal = v === true ? "Да" : v === false ? "Нет" : String(v || "—");
+          auditLogs.push(`Для поля «${k}» установлено значение «${displayVal}»`);
+        }
+        prevCustom[k] = v;
+      }
+    }
+    dealUpdate.customFields = prevCustom;
+
+    // Pipeline / stage move
+    const targetPipelineId = data.pipelineId || deal.pipelineId;
+    if (data.pipelineId || data.stageId) {
+      const targetStages = await prisma.stage.findMany({
+        where: { pipelineId: targetPipelineId },
+        orderBy: { order: "asc" },
+      });
+      if (targetStages.length > 0) {
+        const chosenStage =
+          (data.stageId && targetStages.find((s) => s.id === data.stageId)) ||
+          targetStages.find((s) => s.type === StageType.OPEN) ||
+          targetStages[0];
+
+        if (chosenStage.id !== deal.stageId || targetPipelineId !== deal.pipelineId) {
+          dealUpdate.pipelineId = targetPipelineId;
+          dealUpdate.stageId = chosenStage.id;
+          dealUpdate.closedAt = resolveClosedAtByStageType(chosenStage.type, deal.closedAt);
+          auditLogs.push(`Сделка перемещена на этап «${chosenStage.name}»`);
+        }
+      }
+    }
+
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: dealUpdate as Prisma.DealUpdateInput,
+    });
+
+    // Обновление контакта при необходимости
+    if (data.contact && deal.contactId) {
+      const contactUpdate: Record<string, unknown> = {};
+      if (data.contact.name && data.contact.name.trim() !== deal.contact.name) {
+        contactUpdate.name = data.contact.name.trim();
+        auditLogs.push(`Имя контакта изменено на «${data.contact.name.trim()}»`);
+      }
+      if (data.contact.phone && data.contact.phone.trim() !== deal.contact.phone) {
+        contactUpdate.phone = data.contact.phone.trim();
+        auditLogs.push(`Телефон контакта изменен на «${data.contact.phone.trim()}»`);
+      }
+      if (data.contact.company !== undefined && data.contact.company !== deal.contact.company) {
+        contactUpdate.company = data.contact.company ? data.contact.company.trim() : null;
+        auditLogs.push(`Компания изменена на «${contactUpdate.company || "—"}»`);
+      }
+      if (data.contact.email !== undefined && data.contact.email !== deal.contact.email) {
+        contactUpdate.email = data.contact.email ? data.contact.email.trim() : null;
+        auditLogs.push(`Email изменен на «${contactUpdate.email || "—"}»`);
+      }
+      if (data.contact.customFields) {
+        const prevContactCustom =
+          deal.contact.customFields && typeof deal.contact.customFields === "object" && !Array.isArray(deal.contact.customFields)
+            ? { ...(deal.contact.customFields as Record<string, unknown>) }
+            : {};
+        for (const [k, v] of Object.entries(data.contact.customFields)) {
+          if (prevContactCustom[k] !== v) {
+            auditLogs.push(`Для контакта поле «${k}»: «${v || "—"}»`);
+          }
+          prevContactCustom[k] = v;
+        }
+        contactUpdate.customFields = prevContactCustom;
+      }
+
+      if (Object.keys(contactUpdate).length > 0) {
+        await prisma.contact.update({
+          where: { id: deal.contactId },
+          data: contactUpdate as Prisma.ContactUpdateInput,
+        });
+      }
+    }
+
+    // Сохраняем аудит-логи в ContactNote для формирования ленты событий amoCRM
+    if (auditLogs.length > 0 && deal.contactId) {
+      await prisma.contactNote.create({
+        data: {
+          contactId: deal.contactId,
+          authorId: user.id,
+          content: `${user.name}: ${auditLogs.join(". ")}`,
+        },
+      });
+    }
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/whatsapp");
+    revalidatePath("/");
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка обновления сделки";
+    return { success: false, error: message };
+  }
+}
+
+// 13. Добавление примечания к сделке (в ленту событий контакта)
+export async function addDealNoteAction(contactId: string, content: string) {
+  try {
+    const user = await getAuthUser();
+    if (!content?.trim()) {
+      return { success: false, error: "Введите текст примечания" };
+    }
+    const note = await prisma.contactNote.create({
+      data: {
+        contactId,
+        authorId: user.id,
+        content: content.trim(),
+      },
+      include: { author: { select: { id: true, name: true } } },
+    });
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    return {
+      success: true,
+      note: {
+        id: note.id,
+        content: note.content,
+        createdAt: note.createdAt.toISOString(),
+        author: { id: note.author.id, name: note.author.name },
+      },
+    };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка добавления примечания" };
   }
 }

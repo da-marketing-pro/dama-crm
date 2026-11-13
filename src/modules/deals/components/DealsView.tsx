@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DealItem, PipelineWithStages } from "../types";
+import { DealItem, PipelineWithStages, DealCustomFieldDef } from "../types";
 import { DealsKanban } from "./DealsKanban";
 import { CreateDealModal } from "./CreateDealModal";
 import { PipelineSettingsModal } from "./PipelineSettingsModal";
@@ -28,6 +28,7 @@ interface DealsViewProps {
   currentUserId: string;
   users: { id: string; name: string }[];
   sourceOptions?: string[];
+  initialFieldDefinitions?: DealCustomFieldDef[];
   currencyRateUsd?: number;
   currencyRateRub?: number;
 }
@@ -38,6 +39,7 @@ export function DealsView({
   currentUserId,
   users,
   sourceOptions,
+  initialFieldDefinitions,
   currencyRateUsd = 495,
   currencyRateRub = 5.2,
 }: DealsViewProps) {
@@ -310,6 +312,7 @@ export function DealsView({
             users={users}
             pipelines={pipelines}
             sourceOptions={sourceOptions}
+            initialFieldDefinitions={initialFieldDefinitions}
             onDealDeleted={() => {
               setSelectedDeal(null);
               router.refresh();
