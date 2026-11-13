@@ -123,7 +123,7 @@ export function EmbeddedWhatsappChat({
   };
 
   return (
-    <div className="flex flex-col h-[480px] bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+    <div className="flex flex-col h-full flex-1 min-h-0 bg-white rounded-xl sm:rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
       {/* Mini Header */}
       <div className="h-11 px-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
@@ -150,7 +150,7 @@ export function EmbeddedWhatsappChat({
       {/* Message List */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-3 space-y-3 bg-[#EFEAE2]/30"
+        className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3 bg-[#EFEAE2]/30"
         style={{
           backgroundImage: "radial-gradient(#CBD5E1 0.75px, transparent 0.75px)",
           backgroundSize: "16px 16px",

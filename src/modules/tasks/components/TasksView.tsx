@@ -50,6 +50,12 @@ interface TaskItemData {
   deal?: {
     id: string;
     title: string;
+    contact?: {
+      id: string;
+      name: string;
+      phone: string;
+      company?: string | null;
+    } | null;
   } | null;
   contact?: {
     id: string;
@@ -236,6 +242,24 @@ export function TasksView({
   // Drag and Drop State
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
+
+  // Copy phone notification state
+  const [copiedPhoneTaskId, setCopiedPhoneTaskId] = useState<string | null>(null);
+
+  const handleCallAction = async (phone: string, taskId: string) => {
+    const clean = phone.trim();
+    if (!clean) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(clean);
+      }
+    } catch (err) {
+      console.warn("Clipboard copy warning:", err);
+    }
+    setCopiedPhoneTaskId(taskId);
+    setTimeout(() => setCopiedPhoneTaskId(null), 2500);
+    window.open(`tel:${clean.replace(/\s+/g, "")}`, "_self");
+  };
 
   const now = new Date();
   const todayStr = getLocalDateString(now);
@@ -501,12 +525,22 @@ export function TasksView({
     // Line 3: Schedule + Manager
     const scheduleText = formatTaskTimeSchedule(task.dueDate, task.assignedTo.name);
 
+    const isCallType = task.taskType === "CALL";
+    const targetPhone = task.contact?.phone || task.deal?.contact?.phone || "";
+
     return (
       <div
         key={task.id}
         draggable={true}
         onDragStart={(e) => handleDragStart(e, task.id)}
-        className={`group relative bg-white border rounded-xl p-3 shadow-xs hover:shadow-md transition-all cursor-grab active:cursor-grabbing select-none ${
+        onClick={() => {
+          if (task.deal?.id) {
+            router.push(`/deals?dealId=${task.deal.id}`);
+          }
+        }}
+        className={`group relative bg-white border rounded-xl p-3 shadow-xs hover:shadow-md transition-all select-none ${
+          task.deal?.id ? "cursor-pointer hover:border-blue-400" : "cursor-grab active:cursor-grabbing"
+        } ${
           task.isCompleted
             ? "border-slate-200 bg-slate-50/70 opacity-65"
             : isOverdue
@@ -524,6 +558,7 @@ export function TasksView({
             {task.contact ? (
               <Link
                 href={`/contacts?contactId=${task.contact.id}`}
+                onClick={(e) => e.stopPropagation()}
                 className="hover:text-blue-600 truncate"
                 title={contactText}
               >
@@ -537,7 +572,8 @@ export function TasksView({
           {/* Quick complete checkbox / checkmark */}
           <button
             type="button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               if (task.isCompleted) {
                 toggleTaskCompleted(task.id, false);
                 router.refresh();
@@ -560,7 +596,8 @@ export function TasksView({
         <div className="mb-1.5">
           {task.deal ? (
             <Link
-              href="/deals"
+              href={`/deals?dealId=${task.deal.id}`}
+              onClick={(e) => e.stopPropagation()}
               className="text-xs font-bold text-blue-600 hover:text-blue-800 line-clamp-1 flex items-center gap-1"
               title={dealTitle}
             >
@@ -591,28 +628,79 @@ export function TasksView({
 
         {/* Line 4: Action Type & Title */}
         <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 min-w-0">
-            <TypeIcon className={`w-3.5 h-3.5 ${typeInfo.color} shrink-0`} />
-            <span
-              className={`truncate ${
-                task.isCompleted ? "line-through text-slate-400" : ""
-              }`}
-              title={task.title}
+          {task.deal ? (
+            <Link
+              href={`/deals?dealId=${task.deal.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 hover:text-blue-600 min-w-0 flex-1 group/title"
             >
-              <span className="font-bold">{typeInfo.label}:</span> {task.title}
-            </span>
-          </div>
+              <TypeIcon className={`w-3.5 h-3.5 ${typeInfo.color} shrink-0`} />
+              <span
+                className={`truncate ${
+                  task.isCompleted ? "line-through text-slate-400" : ""
+                }`}
+                title={task.title}
+              >
+                <span className="font-bold">{typeInfo.label}:</span> {task.title}
+              </span>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 min-w-0 flex-1">
+              <TypeIcon className={`w-3.5 h-3.5 ${typeInfo.color} shrink-0`} />
+              <span
+                className={`truncate ${
+                  task.isCompleted ? "line-through text-slate-400" : ""
+                }`}
+                title={task.title}
+              >
+                <span className="font-bold">{typeInfo.label}:</span> {task.title}
+              </span>
+            </div>
+          )}
 
           {/* Delete Action on hover */}
           <button
             type="button"
-            onClick={() => handleDeleteTask(task.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDeleteTask(task.id);
+            }}
             title="Удалить задачу"
             className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-rose-600 transition-opacity p-0.5 cursor-pointer shrink-0"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        {/* Quick Call / WhatsApp buttons for "CALL" task type */}
+        {isCallType && targetPhone && (
+          <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCallAction(targetPhone, task.id);
+              }}
+              className="flex-1 py-1 px-2 rounded-lg bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 text-blue-700 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+              title="Скопировать номер в буфер обмена и открыть вызов"
+            >
+              <Phone className="w-3 h-3 text-blue-600" />
+              <span>{copiedPhoneTaskId === task.id ? "Скопирован!" : "Позвонить"}</span>
+            </button>
+
+            <a
+              href={`https://wa.me/${targetPhone.replace(/\D/g, "")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="py-1 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 text-emerald-700 text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer shadow-2xs"
+              title="Позвонить или написать в WhatsApp"
+            >
+              <MessageCircle className="w-3 h-3 text-emerald-600" />
+              <span>WhatsApp</span>
+            </a>
+          </div>
+        )}
 
         {/* Result comment if present */}
         {task.resultComment && (
@@ -1087,13 +1175,24 @@ export function TasksView({
                         {/* Title & Type */}
                         <td className="py-3.5 px-4">
                           <div className="space-y-1">
-                            <div
-                              className={`font-bold text-slate-900 ${
-                                task.isCompleted ? "line-through text-slate-400" : ""
-                              }`}
-                            >
-                              {task.title}
-                            </div>
+                            {task.deal ? (
+                              <Link
+                                href={`/deals?dealId=${task.deal.id}`}
+                                className={`font-bold text-slate-900 hover:text-blue-600 block ${
+                                  task.isCompleted ? "line-through text-slate-400" : ""
+                                }`}
+                              >
+                                {task.title}
+                              </Link>
+                            ) : (
+                              <div
+                                className={`font-bold text-slate-900 ${
+                                  task.isCompleted ? "line-through text-slate-400" : ""
+                                }`}
+                              >
+                                {task.title}
+                              </div>
+                            )}
                             <span
                               className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-semibold border ${typeInfo.badgeBg}`}
                             >
@@ -1112,7 +1211,7 @@ export function TasksView({
                           <div className="space-y-0.5">
                             {task.deal ? (
                               <Link
-                                href="/deals"
+                                href={`/deals?dealId=${task.deal.id}`}
                                 className="font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
                               >
                                 <Briefcase className="w-3 h-3 text-blue-500" />
@@ -1179,16 +1278,39 @@ export function TasksView({
                           </span>
                         </td>
 
-                        {/* Delete Action */}
+                        {/* Actions (Call, WhatsApp, Delete) */}
                         <td className="py-3.5 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteTask(task.id)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                            title="Удалить задачу"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {task.taskType === "CALL" && (task.contact?.phone || task.deal?.contact?.phone) && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCallAction(task.contact?.phone || task.deal?.contact?.phone || "", task.id)}
+                                  className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
+                                  title="Скопировать номер и позвонить"
+                                >
+                                  <Phone className="w-3.5 h-3.5" />
+                                </button>
+                                <a
+                                  href={`https://wa.me/${(task.contact?.phone || task.deal?.contact?.phone || "").replace(/\D/g, "")}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 transition-colors"
+                                  title="Позвонить / Чат в WhatsApp"
+                                >
+                                  <MessageCircle className="w-3.5 h-3.5" />
+                                </a>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTask(task.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                              title="Удалить задачу"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

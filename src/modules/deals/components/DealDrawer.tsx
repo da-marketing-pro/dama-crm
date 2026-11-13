@@ -413,7 +413,7 @@ export function DealDrawer({
   }, [notes, deal.tasks, deal.payments, feedSearch]);
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden flex items-stretch justify-end">
+    <div className="fixed inset-0 z-50 overflow-hidden flex items-stretch justify-end h-[100dvh] max-h-[100dvh]">
       {/* Backdrop */}
       <div
         onClick={onClose}
@@ -421,7 +421,7 @@ export function DealDrawer({
       />
 
       {/* amoCRM Dark Main Drawer */}
-      <div className="relative w-full max-w-[1280px] bg-[#0f1d2b] text-slate-200 shadow-2xl flex flex-col border-l border-[#1b324d] animate-in slide-in-from-right duration-300 z-10 font-sans">
+      <div className="relative w-full max-w-[1280px] bg-[#0f1d2b] text-slate-200 shadow-2xl flex flex-col border-l border-[#1b324d] animate-in slide-in-from-right duration-300 z-10 font-sans h-full max-h-[100dvh] overflow-hidden">
         {/* ================= TOP HEADER (amoCRM Header) ================= */}
         <div className="h-14 px-5 bg-[#0f1d2b] border-b border-[#1b324d] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -638,11 +638,11 @@ export function DealDrawer({
         </div>
 
         {/* ================= 2-COLUMN MAIN BODY ================= */}
-        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-12 md:divide-x divide-[#1b324d]">
+        <div className="flex-1 min-h-0 overflow-hidden grid grid-cols-1 md:grid-cols-12 md:divide-x divide-[#1b324d]">
           {/* ================= LEFT COLUMN (5/12): AmoCRM Fields & Contact ================= */}
           <div
             className={cn(
-              "md:col-span-5 flex-col h-full overflow-hidden bg-[#0f1d2b]",
+              "md:col-span-5 flex-col h-full min-h-0 overflow-hidden bg-[#0f1d2b]",
               mobileActiveTab === "left" ? "flex" : "hidden md:flex"
             )}
           >
@@ -1219,12 +1219,12 @@ export function DealDrawer({
           {/* ================= RIGHT COLUMN (7/12): AmoCRM Feed & Composer OR WhatsApp ================= */}
           <div
             className={cn(
-              "md:col-span-7 flex-col h-full overflow-hidden bg-[#0a1520]",
+              "md:col-span-7 flex-col h-full min-h-0 overflow-hidden bg-[#0a1520]",
               mobileActiveTab === "right" ? "flex" : "hidden md:flex"
             )}
           >
             {/* Top Toolbar on Right Column */}
-            <div className="h-12 px-5 bg-[#0d1b2a] border-b border-[#1b324d] flex items-center justify-between shrink-0">
+            <div className="h-12 px-3 sm:px-5 bg-[#0d1b2a] border-b border-[#1b324d] flex items-center justify-between shrink-0">
               {/* Search & Filter */}
               <div className="relative flex-1 max-w-xs">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
@@ -1267,7 +1267,7 @@ export function DealDrawer({
 
             {/* Main Content Area */}
             {rightView === "whatsapp" ? (
-              <div className="flex-1 overflow-hidden p-3 bg-[#0c1926]">
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-2 sm:p-3 bg-[#0c1926]">
                 <EmbeddedWhatsappChat
                   dealId={deal.id}
                   contactId={deal.contactId}

@@ -25,6 +25,14 @@ export default async function TasksPage() {
           select: {
             id: true,
             title: true,
+            contact: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                company: true,
+              },
+            },
           },
         },
         contact: {

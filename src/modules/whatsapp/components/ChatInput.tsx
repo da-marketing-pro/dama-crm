@@ -156,7 +156,7 @@ export function ChatInput({
   };
 
   return (
-    <div className="p-3 bg-white border-t border-slate-200">
+    <div className="p-2.5 sm:p-3 bg-white border-t border-slate-200 shrink-0 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
       {/* Hidden File Input */}
       <input
         ref={fileInputRef}

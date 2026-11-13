@@ -337,7 +337,16 @@ export function DealsView({
             key={syncedDeal?.id || "closed"}
             deal={syncedDeal}
             isOpen={!!syncedDeal}
-            onClose={() => setSelectedDeal(null)}
+            onClose={() => {
+              setSelectedDeal(null);
+              if (typeof window !== "undefined") {
+                const url = new URL(window.location.href);
+                if (url.searchParams.has("dealId")) {
+                  url.searchParams.delete("dealId");
+                  window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+                }
+              }
+            }}
             isAdmin={isAdmin}
             currentUserId={currentUserId}
             users={users}

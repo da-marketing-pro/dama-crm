@@ -40,7 +40,11 @@ export default async function DealsPage({
   const user = session.user;
   const isAdmin = user.role === Role.ADMIN;
 
-  const dealFilter = isAdmin ? {} : { assignedToId: user.id };
+  const dealFilter = isAdmin
+    ? {}
+    : searchParams?.dealId
+    ? { OR: [{ assignedToId: user.id }, { id: searchParams.dealId }] }
+    : { assignedToId: user.id };
 
   const [rawPipelines, users, currencySetting, allFieldDefs] = await Promise.all([
     prisma.pipeline.findMany({
