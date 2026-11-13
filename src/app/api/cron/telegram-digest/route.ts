@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { sendDailyTasksDigest } from "@/lib/telegramService";
+import { prisma } from "@/lib/prisma";
+import { sendDailyTasksDigest, setupTelegramBotWebhook } from "@/lib/telegramService";
 
 async function isAuthorized(req: NextRequest): Promise<boolean> {
   const validSecrets = new Set([
@@ -41,6 +42,14 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
+  if (searchParams.get("setup") === "1") {
+    const setting = await prisma.telegramSetting.findFirst();
+    if (setting?.botToken) {
+      const setupRes = await setupTelegramBotWebhook(setting.botToken);
+      return NextResponse.json({ setup: setupRes });
+    }
+  }
+
   const force = searchParams.get("force") === "1" || searchParams.get("force") === "true";
 
   const result = await sendDailyTasksDigest({ force });
@@ -54,6 +63,14 @@ export async function POST(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
+  if (searchParams.get("setup") === "1") {
+    const setting = await prisma.telegramSetting.findFirst();
+    if (setting?.botToken) {
+      const setupRes = await setupTelegramBotWebhook(setting.botToken);
+      return NextResponse.json({ setup: setupRes });
+    }
+  }
+
   const force = searchParams.get("force") === "1" || searchParams.get("force") === "true";
 
   const result = await sendDailyTasksDigest({ force });
