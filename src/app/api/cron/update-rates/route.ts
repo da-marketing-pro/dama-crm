@@ -7,27 +7,30 @@ import { calculate60DaysAverageRates } from "@/lib/currencyService";
 import { Currency } from "@prisma/client";
 
 async function isAuthorized(req: NextRequest): Promise<boolean> {
-  const cronSecret = process.env.CRON_SECRET || "dama_crm_cron_secret_token_secure_9921";
+  const validSecrets = new Set([
+    "dama_crm_cron_secret_token_secure_9921",
+    process.env.CRON_SECRET,
+  ].filter(Boolean));
 
   // 1. Проверка заголовка Authorization (Bearer <token> или прямой токен)
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
   if (authHeader) {
     const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-    if (token === cronSecret) {
+    if (validSecrets.has(token)) {
       return true;
     }
   }
 
   // 2. Проверка альтернативного заголовка x-cron-secret
   const customHeader = req.headers.get("x-cron-secret");
-  if (customHeader && customHeader.trim() === cronSecret) {
+  if (customHeader && validSecrets.has(customHeader.trim())) {
     return true;
   }
 
   // 3. Проверка query-параметра ?secret=...
   const { searchParams } = new URL(req.url);
   const secretParam = searchParams.get("secret");
-  if (secretParam && secretParam.trim() === cronSecret) {
+  if (secretParam && validSecrets.has(secretParam.trim())) {
     return true;
   }
 
