@@ -127,3 +127,64 @@ export async function deleteTask(taskId: string) {
     return { success: false, error: message };
   }
 }
+
+// 4. Перенос срока задачи (для перетаскивания в канбане)
+export async function updateTaskDueDate(taskId: string, newDueDate: Date | string) {
+  try {
+    await getAuthUser();
+
+    await prisma.task.update({
+      where: { id: taskId },
+      data: {
+        dueDate: new Date(newDueDate),
+      },
+    });
+
+    revalidatePath("/tasks");
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/");
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка изменения срока задачи";
+    return { success: false, error: message };
+  }
+}
+
+// 5. Переключение статуса выполнения задачи
+export async function toggleTaskCompleted(taskId: string, isCompleted: boolean, resultComment?: string) {
+  try {
+    const user = await getAuthUser();
+
+    const task = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) return { success: false, error: "Задача не найдена" };
+
+    await prisma.task.update({
+      where: { id: taskId },
+      data: {
+        isCompleted,
+        completedAt: isCompleted ? new Date() : null,
+        resultComment: isCompleted ? (resultComment?.trim() || null) : null,
+      },
+    });
+
+    if (isCompleted && task.contactId) {
+      await prisma.contactNote.create({
+        data: {
+          contactId: task.contactId,
+          authorId: user.id,
+          content: `Завершена задача «${task.title}»${resultComment ? ` с результатом: ${resultComment}` : ""}`,
+        },
+      });
+    }
+
+    revalidatePath("/tasks");
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/");
+    return { success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка обновления статуса задачи";
+    return { success: false, error: message };
+  }
+}

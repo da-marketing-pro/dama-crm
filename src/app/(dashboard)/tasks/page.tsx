@@ -32,6 +32,7 @@ export default async function TasksPage() {
             id: true,
             name: true,
             phone: true,
+            company: true,
           },
         },
         assignedTo: {
