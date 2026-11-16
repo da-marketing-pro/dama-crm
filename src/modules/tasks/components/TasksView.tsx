@@ -36,7 +36,10 @@ import {
   List,
   ExternalLink,
   ChevronDown,
+  Settings,
 } from "lucide-react";
+import { EditTaskModal, TaskEditableData } from "./EditTaskModal";
+import { CalendarSyncModal } from "./CalendarSyncModal";
 
 interface TaskItemData {
   id: string;
@@ -234,6 +237,10 @@ export function TasksView({
   const [assignedToId, setAssignedToId] = useState(currentUserId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Edit Task & Calendar Sync Modals state
+  const [editingTask, setEditingTask] = useState<TaskEditableData | null>(null);
+  const [isCalendarSyncOpen, setIsCalendarSyncOpen] = useState(false);
 
   // Complete Task Dialog state
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null);
@@ -470,11 +477,16 @@ export function TasksView({
     setIsSubmitting(true);
     setError(null);
 
+    // Convert local datetime input safely to ISO
+    const resolvedDueDate = dueDate.includes("Z") || dueDate.includes("+")
+      ? dueDate
+      : new Date(dueDate).toISOString();
+
     const res = await createTask({
       title: title.trim(),
       description: description.trim() || undefined,
       taskType,
-      dueDate,
+      dueDate: resolvedDueDate,
       dealId: dealId || undefined,
       contactId: contactId || undefined,
       assignedToId,
@@ -569,27 +581,42 @@ export function TasksView({
             )}
           </div>
 
-          {/* Quick complete checkbox / checkmark */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (task.isCompleted) {
-                toggleTaskCompleted(task.id, false);
-                router.refresh();
-              } else {
-                setCompletingTaskId(task.id);
-              }
-            }}
-            title={task.isCompleted ? "Снять отметку о выполнении" : "Завершить задачу"}
-            className="text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer shrink-0"
-          >
-            {task.isCompleted ? (
-              <CheckSquare className="w-4 h-4 text-emerald-600" />
-            ) : (
-              <Square className="w-4 h-4" />
-            )}
-          </button>
+          {/* Action buttons: Gear edit + Complete checkbox */}
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingTask(task);
+              }}
+              title="Редактировать параметры задачи (дата, время, тип)"
+              className="text-slate-400 hover:text-slate-700 p-0.5 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Quick complete checkbox / checkmark */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (task.isCompleted) {
+                  toggleTaskCompleted(task.id, false);
+                  router.refresh();
+                } else {
+                  setCompletingTaskId(task.id);
+                }
+              }}
+              title={task.isCompleted ? "Снять отметку о выполнении" : "Завершить задачу"}
+              className="text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer shrink-0"
+            >
+              {task.isCompleted ? (
+                <CheckSquare className="w-4 h-4 text-emerald-600" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Line 2: Deal Title (Bold Blue Link) */}
@@ -764,6 +791,17 @@ export function TasksView({
               <span>Список</span>
             </button>
           </div>
+
+          {/* Google Calendar Sync button */}
+          <button
+            type="button"
+            onClick={() => setIsCalendarSyncOpen(true)}
+            className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 hover:text-blue-600 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+            title="Синхронизация задач с Google Календарём"
+          >
+            <Calendar className="w-4 h-4 text-blue-600" />
+            <span>Синхронизировать</span>
+          </button>
 
           <button
             onClick={() => handleOpenCreateForDate()}
@@ -1304,6 +1342,14 @@ export function TasksView({
                             )}
                             <button
                               type="button"
+                              onClick={() => setEditingTask(task)}
+                              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                              title="Редактировать параметры задачи"
+                            >
+                              <Settings className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleDeleteTask(task.id)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
                               title="Удалить задачу"
@@ -1481,6 +1527,24 @@ export function TasksView({
           </div>
         </div>
       )}
+
+      {/* ================= EDIT TASK MODAL ================= */}
+      {editingTask && (
+        <EditTaskModal
+          task={editingTask}
+          isOpen={!!editingTask}
+          onClose={() => setEditingTask(null)}
+          onSaved={() => router.refresh()}
+          users={users}
+        />
+      )}
+
+      {/* ================= CALENDAR SYNC MODAL ================= */}
+      <CalendarSyncModal
+        isOpen={isCalendarSyncOpen}
+        onClose={() => setIsCalendarSyncOpen(false)}
+        icsUrl="https://crm.da-marketing.pro/api/calendar/admin.ics"
+      />
     </div>
   );
 }

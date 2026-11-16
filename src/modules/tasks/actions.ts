@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { parseClientDueDate } from "@/lib/utils";
 
 async function getAuthUser() {
   const session = await getServerSession(authOptions);
@@ -40,12 +41,14 @@ export async function createTask(data: {
       if (deal) contactId = deal.contactId;
     }
 
+    const parsedDue = parseClientDueDate(data.dueDate);
+
     const task = await prisma.task.create({
       data: {
         title: data.title.trim(),
         description: data.description?.trim() || null,
         taskType: data.taskType || "CALL",
-        dueDate: new Date(data.dueDate),
+        dueDate: parsedDue,
         dealId: data.dealId || null,
         contactId: contactId || null,
         assignedToId: data.assignedToId || user.id,
@@ -136,7 +139,7 @@ export async function updateTaskDueDate(taskId: string, newDueDate: Date | strin
     await prisma.task.update({
       where: { id: taskId },
       data: {
-        dueDate: new Date(newDueDate),
+        dueDate: parseClientDueDate(newDueDate),
       },
     });
 
@@ -147,6 +150,55 @@ export async function updateTaskDueDate(taskId: string, newDueDate: Date | strin
     return { success: true };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Ошибка изменения срока задачи";
+    return { success: false, error: message };
+  }
+}
+
+// 4.1 Полное редактирование задачи (время, дата, тип, название, описание, ответственный)
+export async function updateTask(data: {
+  taskId: string;
+  title?: string;
+  description?: string;
+  taskType?: string;
+  dueDate?: Date | string;
+  assignedToId?: string;
+}) {
+  try {
+    await getAuthUser();
+
+    const task = await prisma.task.findUnique({
+      where: { id: data.taskId },
+    });
+
+    if (!task) {
+      return { success: false, error: "Задача не найдена" };
+    }
+
+    const updatedDueDate = data.dueDate ? parseClientDueDate(data.dueDate) : undefined;
+
+    const updated = await prisma.task.update({
+      where: { id: data.taskId },
+      data: {
+        ...(data.title?.trim() ? { title: data.title.trim() } : {}),
+        ...(data.description !== undefined ? { description: data.description?.trim() || null } : {}),
+        ...(data.taskType ? { taskType: data.taskType } : {}),
+        ...(updatedDueDate ? { dueDate: updatedDueDate } : {}),
+        ...(data.assignedToId ? { assignedToId: data.assignedToId } : {}),
+      },
+      include: {
+        assignedTo: true,
+        deal: true,
+        contact: true,
+      },
+    });
+
+    revalidatePath("/tasks");
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/");
+    return { success: true, task: updated };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Ошибка обновления задачи";
     return { success: false, error: message };
   }
 }

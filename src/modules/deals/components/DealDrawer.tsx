@@ -26,6 +26,7 @@ import { buildDealSourceOptions } from "@/lib/dealSource";
 import { Currency, StageType } from "@prisma/client";
 import { EmbeddedWhatsappChat } from "@/modules/whatsapp/components/EmbeddedWhatsappChat";
 import { DealFieldSettingsModal } from "./DealFieldSettingsModal";
+import { EditTaskModal, TaskEditableData } from "@/modules/tasks/components/EditTaskModal";
 import {
   ChevronLeft,
   X,
@@ -171,6 +172,9 @@ export function DealDrawer({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Modal to edit task parameters (date, time, type)
+  const [editingTask, setEditingTask] = useState<TaskEditableData | null>(null);
 
   // Actions & Feed state
   const [notes, setNotes] = useState<DealNoteItem[]>(deal.contact.notes || []);
@@ -387,10 +391,15 @@ export function DealDrawer({
     setIsTaskSubmitting(true);
     setErrorMessage(null);
 
+    // Convert local datetime input to ISO or rely on server parseClientDueDate
+    const resolvedDueDate = taskDueDate.includes("Z") || taskDueDate.includes("+")
+      ? taskDueDate
+      : new Date(taskDueDate).toISOString();
+
     const res = await createTask({
       title: taskTitle.trim(),
       taskType,
-      dueDate: taskDueDate,
+      dueDate: resolvedDueDate,
       dealId: deal.id,
       contactId: deal.contactId,
       assignedToId: taskAssignedId,
@@ -2103,9 +2112,38 @@ export function DealDrawer({
                                 </span>
                               </div>
 
-                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#203a54] text-blue-300">
-                                {task.taskType}
-                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingTask({
+                                    id: task.id,
+                                    title: task.title,
+                                    description: task.description,
+                                    dueDate: task.dueDate,
+                                    taskType: task.taskType,
+                                    assignedToId: task.assignedTo?.id,
+                                    assignedTo: task.assignedTo,
+                                    deal: {
+                                      id: deal.id,
+                                      title: deal.title,
+                                      contact: deal.contact ? { phone: deal.contact.phone } : null,
+                                    },
+                                    contact: deal.contact
+                                      ? {
+                                          id: deal.contact.id,
+                                          name: deal.contact.name,
+                                          phone: deal.contact.phone,
+                                          company: deal.contact.company,
+                                        }
+                                      : null,
+                                  })
+                                }
+                                className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#203a54] hover:bg-[#2a4d70] text-blue-300 flex items-center gap-1 cursor-pointer transition-colors border border-blue-400/20"
+                                title="Нажмите для редактирования параметров задачи"
+                              >
+                                <Settings className="w-2.5 h-2.5 text-blue-300" />
+                                <span>{task.taskType}</span>
+                              </button>
                             </div>
 
                             <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
@@ -2417,6 +2455,17 @@ export function DealDrawer({
         isAdmin={isAdmin}
         onFieldsChanged={reloadFieldDefs}
       />
+
+      {/* ================= EDIT TASK MODAL ================= */}
+      {editingTask && (
+        <EditTaskModal
+          task={editingTask}
+          isOpen={!!editingTask}
+          onClose={() => setEditingTask(null)}
+          onSaved={onDealUpdated}
+          users={users}
+        />
+      )}
     </div>
   );
 }

@@ -29,3 +29,28 @@ export function formatDate(date: Date | string | number): string {
     minute: "2-digit",
   }).format(new Date(date));
 }
+
+/**
+ * Корректно парсит дату со стороны клиента с учетом часового пояса Алматы/Казахстан (UTC+5).
+ * Если клиент прислал ISO-строку с часовым поясом (Z или +05:00), парсит стандартно.
+ * Если пришла строка без таймзоны из <input type="datetime-local"> ("2026-11-16T15:30"),
+ * принудительно фиксирует часовой пояс +05:00, чтобы серверный UTC не смещал время на 5 часов!
+ */
+export function parseClientDueDate(input: Date | string): Date {
+  if (input instanceof Date) return input;
+  const str = String(input || "").trim();
+  if (!str) return new Date();
+
+  // Уже содержит Z или явное смещение (+05:00, -03:00 и т.д.)
+  if (/Z$|[+-]\d{2}:?\d{2}$/i.test(str)) {
+    return new Date(str);
+  }
+
+  // Локальный формат datetime-local: "YYYY-MM-DDTHH:mm" или "YYYY-MM-DD HH:mm"
+  const normalized = str.replace(" ", "T");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(normalized)) {
+    return new Date(`${normalized}+05:00`);
+  }
+
+  return new Date(str);
+}
