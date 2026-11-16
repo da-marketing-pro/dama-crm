@@ -1,25 +1,125 @@
 export const DEFAULT_DEAL_SOURCE_OPTIONS = [
   "Автообзвон",
-  "Таргет Инст",
   "Таргет KZ",
+  "Таргет Int",
+  "Сарафан",
   "Instagram",
   "Сайт",
-  "Рекомендация",
-  "Холодный звонок",
   "Выставка",
 ] as const;
 
-export function buildDealSourceOptions(customOptions: string[] = []): string[] {
-  const seen = new Map<string, string>();
-  for (const opt of [...customOptions, ...DEFAULT_DEAL_SOURCE_OPTIONS]) {
-    const trimmed = opt?.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (!seen.has(key)) {
-      seen.set(key, trimmed);
-    }
+/**
+ * Нормализует название источника лида:
+ * - Убирает "Whatsapp" (такого источника нет)
+ * - Убирает "Не указан" (уже есть в пустом option)
+ * - Объединяет "Рекомендация" -> "Сарафан"
+ * - Объединяет "Холодный звонок" -> "Автообзвон"
+ * - Объединяет дубли "Таргет (KZ)" -> "Таргет KZ"
+ * - Объединяет дубли "Таргет (Инт)" / "Таргет Инст" -> "Таргет Int"
+ */
+export function normalizeDealSourceName(raw: string): string | null {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+
+  // Исключаем пустые маркеры и плейсхолдеры
+  if (
+    lower === "не указан" ||
+    lower === "none" ||
+    lower === "null" ||
+    lower === "—" ||
+    lower === "-"
+  ) {
+    return null;
   }
-  return Array.from(seen.values());
+
+  // Пользователь явно просил убрать источник Whatsapp
+  if (lower === "whatsapp" || lower === "ватсап" || lower === "ватсапп") {
+    return null;
+  }
+
+  // Рекомендация = Сарафан
+  if (
+    lower === "рекомендация" ||
+    lower === "рекомендации" ||
+    lower === "сарафан" ||
+    lower === "сарафанное радио"
+  ) {
+    return "Сарафан";
+  }
+
+  // Холодный звонок = Автообзвон
+  if (
+    lower === "холодный звонок" ||
+    lower === "холодные звонки" ||
+    lower === "автообзвон" ||
+    lower.includes("автообзвон")
+  ) {
+    return "Автообзвон";
+  }
+
+  // Таргет KZ
+  if (
+    lower.includes("таргет") &&
+    (lower.includes("kz") || lower.includes("кз"))
+  ) {
+    return "Таргет KZ";
+  }
+
+  // Таргет Int
+  if (
+    lower.includes("таргет") &&
+    (lower.includes("int") ||
+      lower.includes("инт") ||
+      lower.includes("инст") ||
+      lower.includes("inst"))
+  ) {
+    return "Таргет Int";
+  }
+
+  // Instagram
+  if (lower === "instagram" || lower === "инстаграм" || lower === "инста") {
+    return "Instagram";
+  }
+
+  // Сайт
+  if (lower === "сайт" || lower === "site" || lower === "веб-сайт") {
+    return "Сайт";
+  }
+
+  // Выставка
+  if (lower === "выставка") {
+    return "Выставка";
+  }
+
+  return trimmed;
+}
+
+export function buildDealSourceOptions(customOptions: string[] = []): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (raw: string) => {
+    const normalized = normalizeDealSourceName(raw);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(normalized);
+    }
+  };
+
+  // 1. Сначала добавляем канонические базовые источники в правильном порядке
+  for (const opt of DEFAULT_DEAL_SOURCE_OPTIONS) {
+    add(opt);
+  }
+
+  // 2. Затем добавляем любые кастомные источники из БД
+  for (const opt of customOptions) {
+    add(opt);
+  }
+
+  return result;
 }
 
 function matchPreferredOption(
@@ -102,7 +202,7 @@ export function detectWhatsappLeadSource(params: {
     if (TARGET_KZ_REGEX.test(combined)) {
       return matchPreferredOption("Таргет KZ", params.availableOptions);
     }
-    return matchPreferredOption("Таргет Инст", params.availableOptions);
+    return matchPreferredOption("Таргет Int", params.availableOptions);
   }
 
   return matchPreferredOption("Автообзвон", params.availableOptions);
@@ -118,7 +218,7 @@ function readCustomSourceValue(
   for (const key of ["source", "Источник", "Источник лида", "источник"]) {
     const val = fields[key];
     if (typeof val === "string" && val.trim()) {
-      return val.trim();
+      return normalizeDealSourceName(val.trim()) || val.trim();
     }
   }
 
@@ -128,7 +228,7 @@ function readCustomSourceValue(
       typeof v === "string" &&
       v.trim()
     ) {
-      return v.trim();
+      return normalizeDealSourceName(v.trim()) || v.trim();
     }
   }
 
@@ -168,7 +268,7 @@ export function resolveDealSource(deal: {
       combined
     );
   if (hasTargetCue) {
-    return TARGET_KZ_REGEX.test(combined) ? "Таргет KZ" : "Таргет Инст";
+    return TARGET_KZ_REGEX.test(combined) ? "Таргет KZ" : "Таргет Int";
   }
 
   const isWhatsappOrCallo =

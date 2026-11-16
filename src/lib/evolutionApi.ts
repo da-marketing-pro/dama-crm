@@ -695,11 +695,15 @@ export async function logoutEvolutionInstance(params: {
 }
 
 function formatNumberForEvolution(remoteJidOrPhone: string): string {
-  const trimmed = remoteJidOrPhone.trim();
+  const trimmed = (remoteJidOrPhone || "").trim();
   if (trimmed.endsWith("@g.us") || trimmed.endsWith("@lid")) {
     return trimmed;
   }
-  const stripped = trimmed.replace(/@s\.whatsapp\.net$/i, "").replace(/[^\d]/g, "");
+  let stripped = trimmed.replace(/@s\.whatsapp\.net$/i, "").replace(/[^\d]/g, "");
+  // Приведение номеров Казахстана / СНГ: если введено с 8 (87711234567), переводим в 7 (77711234567)
+  if (stripped.length === 11 && stripped.startsWith("8")) {
+    stripped = "7" + stripped.slice(1);
+  }
   return stripped || trimmed;
 }
 
@@ -731,26 +735,23 @@ export async function sendEvolutionMessage(params: {
   fileName?: string;
   customDelayMs?: number;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { apiUrl, apiKey, instanceName, to, messageType, textContent, mediaUrl, fileName, customDelayMs } = params;
+  const { apiUrl, apiKey, instanceName, to, messageType, textContent, mediaUrl, fileName } = params;
   const number = formatNumberForEvolution(to);
   const encodedInstance = encodeURIComponent(instanceName);
 
-  // Антиспам-защита: рандомизированная имитация набора текста человеком (1800-3200 мс)
-  // Для WhatsApp сокетов это эмулирует статус "печатает..." и предотвращает флаг скрипт-бота
-  const typingDelay =
-    typeof customDelayMs === "number" && customDelayMs >= 0
-      ? customDelayMs
-      : Math.floor(Math.random() * 1400) + 1800;
-
-  // Отправляем явный presence-сигнал набора текста или аудиозаписи
-  evoFetch(apiUrl, apiKey, `/chat/sendPresence/${encodedInstance}`, {
-    method: "POST",
-    body: JSON.stringify({
-      number,
-      presence: messageType === WhatsappMessageType.AUDIO ? "recording" : "composing",
-      delay: typingDelay,
-    }),
-  }).catch(() => null);
+  // Опционально отправляем presence без блокировки и без ожидания
+  try {
+    evoFetch(apiUrl, apiKey, `/chat/sendPresence/${encodedInstance}`, {
+      method: "POST",
+      body: JSON.stringify({
+        number,
+        presence: messageType === WhatsappMessageType.AUDIO ? "recording" : "composing",
+        delay: 1200,
+      }),
+    }).catch(() => null);
+  } catch {
+    // Не критично для доставки
+  }
 
   if (messageType === WhatsappMessageType.TEXT) {
     const res = await evoFetch(apiUrl, apiKey, `/message/sendText/${encodedInstance}`, {
@@ -758,8 +759,6 @@ export async function sendEvolutionMessage(params: {
       body: JSON.stringify({
         number,
         text: textContent || "",
-        delay: typingDelay,
-        linkPreview: false,
       }),
     });
     return { ok: res.ok, error: res.error };
@@ -776,7 +775,6 @@ export async function sendEvolutionMessage(params: {
       body: JSON.stringify({
         number,
         audio: mediaValue,
-        delay: typingDelay,
       }),
     });
 
@@ -791,7 +789,6 @@ export async function sendEvolutionMessage(params: {
         mimetype,
         media: mediaValue,
         fileName: fileName || "voice-message.webm",
-        delay: typingDelay,
       }),
     });
     return { ok: fallbackRes.ok, error: fallbackRes.ok ? undefined : res.error || fallbackRes.error };
@@ -812,7 +809,6 @@ export async function sendEvolutionMessage(params: {
       caption: textContent || "",
       media: mediaValue,
       fileName: fileName || (isImage ? "image.jpg" : "document.pdf"),
-      delay: typingDelay,
     }),
   });
 

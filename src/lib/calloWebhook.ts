@@ -19,6 +19,7 @@ export interface CalloLastWebhookDebug {
   isNewContact?: boolean;
   note?: string;
   rawSummary?: string;
+  headersSummary?: string;
 }
 
 function getCalloSecretBase(): string {
@@ -134,6 +135,20 @@ function flattenJsonIntoParams(
   }
 }
 
+function isUnresolvedTemplatePlaceholder(val?: string | null): boolean {
+  if (!val) return true;
+  const trimmed = val.trim();
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("%") ||
+    trimmed.startsWith("[") ||
+    trimmed.includes("ct_phone") ||
+    trimmed.includes("ct_call_id") ||
+    trimmed === "undefined" ||
+    trimmed === "null"
+  );
+}
+
 function normalizeCalloPhoneInput(params: Record<string, string>): string {
   // 1. Прямые ключи номера клиента (включая ct_*, dst, callee, subscriber и т.д.)
   const direct = pickParam(params, [
@@ -161,19 +176,20 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
     "tel",
     "number",
   ]);
-  if (direct) return direct;
+  if (direct && !isUnresolvedTemplatePlaceholder(direct)) return direct;
 
-  const phone9 = pickParam(params, ["ct_phone9", "phone9"]).replace(/[^\d]/g, "");
-  if (phone9) {
+  const phone9Raw = pickParam(params, ["ct_phone9", "phone9"]);
+  if (phone9Raw && !isUnresolvedTemplatePlaceholder(phone9Raw)) {
+    const phone9 = phone9Raw.replace(/[^\d]/g, "");
     if (phone9.length === 10 || phone9.length === 9) return `+7${phone9}`;
-    return phone9;
+    if (phone9.length >= 7) return phone9;
   }
 
   // 2. Поиск по ключам, содержащим маркеры телефона или абонента
   for (const [key, val] of Object.entries(params)) {
     if (!/phone|tel|caller|callee|abonent|msisdn|dst|dest|subscriber|called|number/i.test(key)) continue;
     const trimmed = val?.trim();
-    if (!trimmed) continue;
+    if (!trimmed || isUnresolvedTemplatePlaceholder(trimmed)) continue;
     const parsed = extractPhoneKeyAndRaw(trimmed);
     if (parsed && !parsed.isLid && parsed.phoneKey.length >= 7) {
       return trimmed;
@@ -183,7 +199,7 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
   // 3. Универсальный поиск: если в ЛЮБОМ значении передан валидный номер телефона (10-12 цифр)
   for (const [, val] of Object.entries(params)) {
     const trimmed = typeof val === "string" ? val.trim() : "";
-    if (!trimmed || trimmed.length < 10) continue;
+    if (!trimmed || trimmed.length < 10 || isUnresolvedTemplatePlaceholder(trimmed)) continue;
     const parsed = extractPhoneKeyAndRaw(trimmed);
     if (
       parsed &&
@@ -200,7 +216,7 @@ function normalizeCalloPhoneInput(params: Record<string, string>): string {
 
 export async function extractCalloParamsFromRequest(
   req: Request
-): Promise<{ params: Record<string, string>; rawBody?: string }> {
+): Promise<{ params: Record<string, string>; rawBody?: string; headersSummary?: string }> {
   const collected: Record<string, string> = {};
 
   try {
@@ -212,8 +228,33 @@ export async function extractCalloParamsFromRequest(
     // ignore malformed url
   }
 
+  // Считываем полезные заголовки, если телефония присылает данные в headers
+  const headersList: string[] = [];
+  try {
+    req.headers.forEach((value, key) => {
+      const lower = key.toLowerCase();
+      if (!/authorization|cookie|secret|token|password/i.test(lower)) {
+        headersList.push(`${key}: ${value}`);
+      }
+      if (
+        lower.startsWith("ct_") ||
+        lower.startsWith("ct-") ||
+        lower.startsWith("x-call") ||
+        /phone|caller|callee|abonent/i.test(key)
+      ) {
+        if (!collected[key]) {
+          collected[key] = value.trim();
+        }
+      }
+    });
+  } catch {
+    // ignore
+  }
+
+  const headersSummary = headersList.slice(0, 10).join("; ");
+
   if (req.method !== "POST" && req.method !== "PUT") {
-    return { params: collected };
+    return { params: collected, headersSummary };
   }
 
   let rawText = "";
@@ -252,6 +293,7 @@ export async function extractCalloParamsFromRequest(
   return {
     params: collected,
     rawBody: rawText ? rawText.slice(0, 1000) : undefined,
+    headersSummary,
   };
 }
 
@@ -281,7 +323,13 @@ export async function saveLastCalloWebhookDebug(
 
 export async function processCalloLeadWebhook(
   rawParams: Record<string, string>,
-  options?: { instanceId?: string; isTest?: boolean; method?: string; rawBody?: string }
+  options?: {
+    instanceId?: string;
+    isTest?: boolean;
+    method?: string;
+    rawBody?: string;
+    headersSummary?: string;
+  }
 ) {
   const phoneInput = normalizeCalloPhoneInput(rawParams);
   const callId = pickParam(rawParams, ["ct_call_id", "call_id", "callId", "id"]);
@@ -317,8 +365,9 @@ export async function processCalloLeadWebhook(
       outcome: options?.isTest ? "error" : "ignored",
       note: options?.isTest
         ? "Не передан корректный номер телефона (ct_phone)"
-        : "Входящий запрос/пинг без номера телефона (принят HTTP 200)",
+        : "Входящий запрос без распознанного номера (вставьте URL с ?ct_phone в Callo)",
       rawSummary: effectiveSummary,
+      headersSummary: options?.headersSummary,
     });
 
     if (options?.isTest) {
@@ -478,6 +527,7 @@ export async function processCalloLeadWebhook(
     allPipelines[0];
 
   const targetStage =
+    targetPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("новый лид")) ||
     targetPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("неразобран")) ||
     targetPipeline?.stages[0];
 
@@ -491,7 +541,7 @@ export async function processCalloLeadWebhook(
 
     if (existingOpenDeal) {
       dealId = existingOpenDeal.id;
-      // Если у контакта уже была открытая сделка, перемещаем её на этап «Неразобранные»,
+      // Если у контакта уже была открытая сделка, перемещаем её на начальный этап («Новый лид»),
       // чтобы новый отклик сразу появился в начале воронки для распределения
       if (existingOpenDeal.stageId !== targetStage.id) {
         await prisma.deal.update({
@@ -507,7 +557,7 @@ export async function processCalloLeadWebhook(
         data: {
           title: clientName
             ? `Автообзвон: ${clientName}`
-            : `Автообзвон Callo: ${cleanPhone}`,
+            : `Лид автообзвон (${cleanPhone})`,
           contactId: contact.id,
           pipelineId: targetPipeline.id,
           stageId: targetStage.id,

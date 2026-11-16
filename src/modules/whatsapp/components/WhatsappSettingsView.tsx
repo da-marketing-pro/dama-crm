@@ -100,6 +100,7 @@ export function WhatsappSettingsView({
   // Webhook copy & Callo autodialer state
   const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [copiedCalloWebhook, setCopiedCalloWebhook] = useState(false);
+  const [copiedCalloPostback, setCopiedCalloPostback] = useState(false);
   const [clientOrigin, setClientOrigin] = useState("https://crm.da-marketing.pro");
   const [calloTestPhone, setCalloTestPhone] = useState("+77015554433");
   const [isTestingCallo, setIsTestingCallo] = useState(false);
@@ -869,52 +870,95 @@ export function WhatsappSettingsView({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* Left: Webhook URL + Callo Setup + Last Signal + Test */}
             <div className="space-y-3.5">
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
-                <div className="text-xs font-bold text-slate-800">
-                  URL вебхука для вставки в Callo.com
-                </div>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 truncate select-all">
-                    {calloWebhookUrl}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(calloWebhookUrl);
-                      setCopiedCalloWebhook(true);
-                      setTimeout(() => setCopiedCalloWebhook(false), 2000);
-                    }}
-                    className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
-                  >
-                    {copiedCalloWebhook ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Скопировано</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Копировать</span>
-                      </>
-                    )}
-                  </button>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-slate-800">
+                    Готовый URL вебхука / постбэка для Callo.com
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                    С параметрами ct_*
+                  </span>
                 </div>
 
-                <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed">
+                {/* Важное предупреждение Callo */}
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 space-y-1">
+                  <p className="font-semibold text-amber-950">
+                    ⚠️ Требование документации Callo (Постбэки):
+                  </p>
+                  <p className="leading-relaxed">
+                    Callo требует указывать в URL параметры с префиксом <code>ct_*</code>. Если указать голый адрес без параметров, Callo отправляет пустой запрос без номера телефона!
+                  </p>
+                </div>
+
+                {/* Рекомендуемый URL для Callo с параметрами */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-700">
+                    Рекомендуемый URL (скопируйте и вставьте в Callo):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 truncate select-all">
+                      {`${calloWebhookUrl}?ct_phone&ct_call_id&ct_campaign_id&ct_button_num&ct_status`}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const readyUrl = `${calloWebhookUrl}?ct_phone&ct_call_id&ct_campaign_id&ct_button_num&ct_status`;
+                        navigator.clipboard.writeText(readyUrl);
+                        setCopiedCalloPostback(true);
+                        setTimeout(() => setCopiedCalloPostback(false), 2000);
+                      }}
+                      className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      {copiedCalloPostback ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-white" />
+                          <span>Скопировано!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Копировать</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Базовый URL (без параметров) */}
+                <div className="space-y-1 pt-1">
+                  <label className="text-[10px] text-slate-500">
+                    Базовый адрес (без параметров):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-mono text-slate-600 truncate select-all">
+                      {calloWebhookUrl}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(calloWebhookUrl);
+                        setCopiedCalloWebhook(true);
+                        setTimeout(() => setCopiedCalloWebhook(false), 2000);
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-[11px] font-medium flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedCalloWebhook ? "Скопировано" : "Копия"}
+                    </button>
+                  </div>
+                </div>
+
+                <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed pt-1 border-t border-slate-200">
                   <li>
-                    В Callo откройте сценарий <strong>«Нажатие цифры 1» → «Отправить вебхук»</strong>.
+                    В Callo откройте кампанию ➔ <strong>Сценарии IVR</strong> (нажатие цифры 1 или распознавание слов) ➔ выберите реакцию <strong>«Webhook»</strong> или укажите в поле <strong>«Постбэки»</strong>.
                   </li>
                   <li>
-                    Метод: подойдет и <strong>POST</strong>, и <strong>GET</strong> (CRM автоматически принимает оба варианта и любые параметры телефона).
+                    Вставьте оранжевую ссылку выше. Callo автоматически подставит в неё номер откликнувшегося абонента (<code>ct_phone</code>).
                   </li>
                   <li>
-                    В Callo в поле URL можно вставить как прямую ссылку выше, так и вариант с явной подстановкой макросов Callo:
-                    <div className="mt-1 p-1.5 rounded-lg bg-slate-100 border border-slate-200/80 font-mono text-[10px] text-slate-700 break-all select-all">
-                      {calloWebhookUrl}?phone={"{ct_phone}"}&call_id={"{ct_call_id}"}&button={"{ct_button_num}"}
-                    </div>
+                    Метод запроса в Callo: подходит как <strong>POST</strong>, так и <strong>GET</strong>.
                   </li>
                   <li>
-                    Рекомендуем отметить галочку <strong>«Отправлять вебхук сразу при срабатывании, не дожидаясь окончания звонка»</strong> — лид придет мгновенно.
+                    Рекомендуем отметить в Callo <strong>«Отправлять сразу, не дожидаясь окончания звонка»</strong>.
                   </li>
                 </ul>
               </div>
@@ -988,6 +1032,11 @@ export function WhatsappSettingsView({
                         {instance.lastCalloWebhook.rawSummary}
                       </div>
                     )}
+                    {instance.lastCalloWebhook.headersSummary && (
+                      <div className="p-2 rounded-lg bg-white/60 border border-orange-200/50 font-mono text-[9px] text-slate-500 break-all">
+                        Заголовки запроса: {instance.lastCalloWebhook.headersSummary}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-[11px] text-orange-900/90 leading-relaxed">
@@ -1000,11 +1049,14 @@ export function WhatsappSettingsView({
                 )}
               </div>
 
-              {/* 1-click Callo Test */}
+              {/* 1-click Callo Test / Manual Add */}
               <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
                 <div className="text-xs font-bold text-slate-800">
-                  Проверить попадание лида в «Холодный автообзвон»
+                  Проверить попадание или вручную добавить отклик Callo
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  Введите номер телефона (например, из email-оповещения Callo), чтобы сразу создать сделку в «Холодный автообзвон» → «Новый лид».
+                </p>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -1036,7 +1088,7 @@ export function WhatsappSettingsView({
                     }}
                     className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-semibold shrink-0 cursor-pointer disabled:opacity-50"
                   >
-                    {isTestingCallo ? "Создаём..." : "Тест лида"}
+                    {isTestingCallo ? "Создаём..." : "Создать лид"}
                   </button>
                 </div>
                 {calloTestResult && (

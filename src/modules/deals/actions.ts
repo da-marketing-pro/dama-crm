@@ -66,8 +66,8 @@ export async function createDeal(data: {
 
     // Если контакт не выбран напрямую, проверяем по телефону или создаем новый
     if (!finalContactId) {
-      if (!data.contactName?.trim() || !data.contactPhone?.trim()) {
-        return { success: false, error: "Укажите имя и телефон клиента" };
+      if (!data.contactPhone?.trim()) {
+        return { success: false, error: "Укажите номер телефона клиента" };
       }
 
       const cleanPhone = data.contactPhone.trim();
@@ -77,11 +77,22 @@ export async function createDeal(data: {
 
       if (existingContact) {
         finalContactId = existingContact.id;
+        // Если у существующего контакта не было имени, а в сделке указали — дополняем
+        if (
+          data.contactName?.trim() &&
+          (!existingContact.name || existingContact.name.startsWith("Клиент (") || existingContact.name.startsWith("Лид "))
+        ) {
+          await prisma.contact.update({
+            where: { id: existingContact.id },
+            data: { name: data.contactName.trim() },
+          });
+        }
       } else {
-        // Создаем новый контакт
+        // Создаем новый контакт: если имя не указано, подставляем «Клиент (телефон)»
+        const fallbackName = data.contactName?.trim() || `Клиент (${cleanPhone})`;
         const newContact = await prisma.contact.create({
           data: {
-            name: data.contactName.trim(),
+            name: fallbackName,
             phone: cleanPhone,
             company: data.contactCompany?.trim() || null,
             assignedToId: data.assignedToId || user.id,

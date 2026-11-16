@@ -2008,8 +2008,8 @@ export function DealDrawer({
                 <EmbeddedWhatsappChat
                   dealId={deal.id}
                   contactId={deal.contactId}
-                  contactPhone={deal.contact?.phone || ""}
-                  contactName={deal.contact?.name || deal.title}
+                  contactPhone={contactPhone || deal.contact?.phone || ""}
+                  contactName={contactName || deal.contact?.name || deal.title}
                 />
               </div>
             ) : (

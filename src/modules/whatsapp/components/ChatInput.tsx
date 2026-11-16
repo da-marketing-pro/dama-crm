@@ -74,27 +74,33 @@ export function ChatInput({
 
     if (selectedAttachment) {
       setIsSending(true);
-      await onSendMessage({
-        messageType: selectedAttachment.type,
-        mediaUrl: selectedAttachment.mediaUrl,
-        fileName: selectedAttachment.fileName,
-        textContent: text.trim() || undefined,
-      });
-      setSelectedAttachment(null);
-      setText("");
-      setIsSending(false);
+      try {
+        await onSendMessage({
+          messageType: selectedAttachment.type,
+          mediaUrl: selectedAttachment.mediaUrl,
+          fileName: selectedAttachment.fileName,
+          textContent: text.trim() || undefined,
+        });
+        setSelectedAttachment(null);
+        setText("");
+      } finally {
+        setIsSending(false);
+      }
       return;
     }
 
     if (!text.trim()) return;
 
     setIsSending(true);
-    await onSendMessage({
-      messageType: WhatsappMessageType.TEXT,
-      textContent: text.trim(),
-    });
-    setText("");
-    setIsSending(false);
+    try {
+      await onSendMessage({
+        messageType: WhatsappMessageType.TEXT,
+        textContent: text.trim(),
+      });
+      setText("");
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -107,12 +113,15 @@ export function ChatInput({
   const handleAudioRecorded = async (base64AudioUrl: string) => {
     setIsRecording(false);
     setIsSending(true);
-    await onSendMessage({
-      messageType: WhatsappMessageType.AUDIO,
-      mediaUrl: base64AudioUrl,
-      textContent: "Голосовое сообщение",
-    });
-    setIsSending(false);
+    try {
+      await onSendMessage({
+        messageType: WhatsappMessageType.AUDIO,
+        mediaUrl: base64AudioUrl,
+        textContent: "Голосовое сообщение",
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {

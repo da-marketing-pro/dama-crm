@@ -21,7 +21,7 @@ export async function handleCalloWebhookRequest(
       );
     }
 
-    const { params, rawBody } = await extractCalloParamsFromRequest(req);
+    const { params, rawBody, headersSummary } = await extractCalloParamsFromRequest(req);
     const providedToken =
       pathToken ||
       req.headers.get("x-callo-token") ||
@@ -36,6 +36,7 @@ export async function handleCalloWebhookRequest(
         outcome: "error",
         note: "401: неверный или отсутствующий токен вебхука",
         rawSummary: summarizeCalloParams(params),
+        headersSummary,
       });
       return NextResponse.json(
         { success: false, error: "Неверный или отсутствующий токен вебхука" },
@@ -63,6 +64,7 @@ export async function handleCalloWebhookRequest(
       instanceId: instance.id,
       method: req.method,
       rawBody,
+      headersSummary,
     });
 
     return NextResponse.json(result, { status: result.statusCode });

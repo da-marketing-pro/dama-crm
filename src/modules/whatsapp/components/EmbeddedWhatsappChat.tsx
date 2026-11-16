@@ -49,6 +49,7 @@ export function EmbeddedWhatsappChat({
   );
   const [draftText, setDraftText] = useState<string>("");
   const [isSendingTemplate, setIsSendingTemplate] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const cleanPhone = contactPhone.replace(/[^\d+]/g, "").trim();
@@ -94,25 +95,32 @@ export function EmbeddedWhatsappChat({
     mediaUrl?: string;
     fileName?: string;
   }) => {
+    setSendError(null);
     if (!cleanPhone) {
-      alert("У контакта не указан корректный номер телефона!");
+      setSendError("У контакта не указан корректный номер телефона!");
       return;
     }
 
-    const res = await sendWhatsappMessage({
-      remoteJid: cleanPhone,
-      contactId,
-      dealId,
-      messageType: payload.messageType,
-      textContent: payload.textContent,
-      mediaUrl: payload.mediaUrl,
-      fileName: payload.fileName,
-    });
+    try {
+      const res = await sendWhatsappMessage({
+        remoteJid: cleanPhone,
+        contactId,
+        dealId,
+        messageType: payload.messageType,
+        textContent: payload.textContent,
+        mediaUrl: payload.mediaUrl,
+        fileName: payload.fileName,
+      });
 
-    if (res.success) {
-      await loadMessages();
-    } else {
-      alert("Ошибка отправки: " + res.error);
+      if (res.success) {
+        setSendError(null);
+        await loadMessages();
+      } else {
+        setSendError(res.error || "Не удалось доставить сообщение через WhatsApp");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Ошибка отправки сообщения";
+      setSendError(msg);
     }
   };
 
@@ -307,6 +315,20 @@ export function EmbeddedWhatsappChat({
           })
         )}
       </div>
+
+      {/* Inline Send Error Banner */}
+      {sendError && (
+        <div className="mx-3 my-1.5 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center justify-between gap-2 shrink-0">
+          <span className="font-medium">{sendError}</span>
+          <button
+            type="button"
+            onClick={() => setSendError(null)}
+            className="text-rose-500 hover:text-rose-700 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Input */}
       <ChatInput
