@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   DealItem,
@@ -11,9 +11,13 @@ import {
 } from "../types";
 import {
   getDealFieldDefinitionsAction,
+  createDealFieldDefinitionAction,
+  deleteDealFieldDefinitionAction,
   updateDealFullAction,
   addDealNoteAction,
   deleteDeal,
+  moveDealStage,
+  moveDealPipeline,
 } from "../actions";
 import { addPayment, deletePayment } from "@/modules/payments/actions";
 import { createTask, completeTask } from "@/modules/tasks/actions";
@@ -35,6 +39,7 @@ import {
   Square,
   Clock,
   User,
+  Users,
   Building2,
   Phone,
   Mail,
@@ -52,6 +57,8 @@ import {
   MessageSquare,
   FileText,
   BarChart3,
+  GripVertical,
+  Sliders,
   Paperclip as AttachmentIcon,
 } from "lucide-react";
 
@@ -95,8 +102,8 @@ export function DealDrawer({
 }: DealDrawerProps) {
   if (!isOpen || !deal) return null;
 
-  // Active Tab on left side: Основное | Статистика | Файлы
-  const [leftTab, setLeftTab] = useState<"general" | "stats" | "files">("general");
+  // Active Tab on left side: Основное | Статистика | Файлы | Настроить
+  const [leftTab, setLeftTab] = useState<"general" | "stats" | "files" | "settings">("general");
 
   // Mobile Active Column Switcher: "left" (Deal & Contact) vs "right" (Feed, Tasks, Chat)
   const [mobileActiveTab, setMobileActiveTab] = useState<"left" | "right">("left");
@@ -139,6 +146,31 @@ export function DealDrawer({
   const [customContactDefs, setCustomContactDefs] = useState<DealCustomFieldDef[]>(
     initialFieldDefinitions?.filter((f) => f.entityType === "CONTACT") || []
   );
+
+  // In-Card Field Settings State (amoCRM tab)
+  const [settingsGroupTab, setSettingsGroupTab] = useState<"general" | "stats" | "files">("general");
+  const [inlineAddingTarget, setInlineAddingTarget] = useState<"DEAL" | "CONTACT" | null>(null);
+  const [inlineNewFieldName, setInlineNewFieldName] = useState("");
+  const [inlineNewFieldType, setInlineNewFieldType] = useState<"TEXT" | "NUMBER" | "DATE" | "SELECT">("TEXT");
+  const [inlineNewFieldOptions, setInlineNewFieldOptions] = useState("");
+  const [isInlineSubmitting, setIsInlineSubmitting] = useState(false);
+  const [inlineFieldError, setInlineFieldError] = useState<string | null>(null);
+
+  // Stage dropdown selector state
+  const [isStageMenuOpen, setIsStageMenuOpen] = useState(false);
+  const [isMovingStage, setIsMovingStage] = useState(false);
+  const stageMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close stage dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (stageMenuRef.current && !stageMenuRef.current.contains(event.target as Node)) {
+        setIsStageMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Actions & Feed state
   const [notes, setNotes] = useState<DealNoteItem[]>(deal.contact.notes || []);
@@ -184,16 +216,112 @@ export function DealDrawer({
   const currentPipeline = pipelines.find((p) => p.id === pipelineId) || pipelines[0];
   const currentStage = currentPipeline?.stages.find((s) => s.id === stageId) || currentPipeline?.stages[0];
 
-  const handleStageSelect = (targetStageId: string) => {
+  // Moving deal to a specific stage
+  const handleStageSelect = async (targetStageId: string) => {
+    if (targetStageId === stageId || isMovingStage) return;
+    setIsMovingStage(true);
+    setErrorMessage(null);
+    const prevStageId = stageId;
     setStageId(targetStageId);
+
+    try {
+      const res = await moveDealStage(deal.id, targetStageId);
+      if (!res.success) {
+        setStageId(prevStageId);
+        setErrorMessage(res.error || "Ошибка перемещения сделки на новый этап");
+      } else {
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2500);
+        onDealUpdated?.();
+      }
+    } catch (err: unknown) {
+      setStageId(prevStageId);
+      setErrorMessage(err instanceof Error ? err.message : "Ошибка перемещения сделки");
+    } finally {
+      setIsMovingStage(false);
+    }
   };
 
-  const handlePipelineSelect = (targetPipelineId: string) => {
+  // Moving deal to another pipeline
+  const handlePipelineSelect = async (targetPipelineId: string) => {
+    if (targetPipelineId === pipelineId || isMovingStage) return;
+    setIsMovingStage(true);
+    setErrorMessage(null);
+    const prevPipelineId = pipelineId;
+    const prevStageId = stageId;
+
+    const targetPipe = pipelines.find((p) => p.id === targetPipelineId);
+    const defaultStage =
+      targetPipe?.stages.find((s) => s.type === StageType.OPEN) || targetPipe?.stages[0];
+
     setPipelineId(targetPipelineId);
-    const pipe = pipelines.find((p) => p.id === targetPipelineId);
-    const defaultStage = pipe?.stages.find((s) => s.type === StageType.OPEN) || pipe?.stages[0];
-    if (defaultStage) {
-      setStageId(defaultStage.id);
+    if (defaultStage) setStageId(defaultStage.id);
+
+    try {
+      const res = await moveDealPipeline(deal.id, targetPipelineId, defaultStage?.id);
+      if (!res.success) {
+        setPipelineId(prevPipelineId);
+        setStageId(prevStageId);
+        setErrorMessage(res.error || "Ошибка перемещения сделки в другую воронку");
+      } else {
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 2500);
+        onDealUpdated?.();
+      }
+    } catch (err: unknown) {
+      setPipelineId(prevPipelineId);
+      setStageId(prevStageId);
+      setErrorMessage(err instanceof Error ? err.message : "Ошибка перемещения сделки");
+    } finally {
+      setIsMovingStage(false);
+    }
+  };
+
+  // In-Card Field Definition Creation
+  const handleInlineAddField = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inlineNewFieldName.trim() || !inlineAddingTarget) return;
+
+    setIsInlineSubmitting(true);
+    setInlineFieldError(null);
+
+    const optionsArray =
+      inlineNewFieldType === "SELECT"
+        ? inlineNewFieldOptions
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+
+    const res = await createDealFieldDefinitionAction({
+      entityType: inlineAddingTarget,
+      name: inlineNewFieldName.trim(),
+      fieldType: inlineNewFieldType,
+      options: optionsArray,
+    });
+
+    setIsInlineSubmitting(false);
+    if (!res.success) {
+      setInlineFieldError(res.error || "Ошибка создания поля");
+    } else {
+      setInlineNewFieldName("");
+      setInlineNewFieldOptions("");
+      setInlineNewFieldType("TEXT");
+      setInlineAddingTarget(null);
+      await reloadFieldDefs();
+    }
+  };
+
+  // In-Card Field Definition Deletion
+  const handleInlineDeleteField = async (fieldId: string, fieldName: string) => {
+    if (!isAdmin) return;
+    if (!confirm(`Удалить поле «${fieldName}»? Данные этого поля перестанут отображаться.`)) return;
+
+    const res = await deleteDealFieldDefinitionAction(fieldId);
+    if (!res.success) {
+      alert(res.error || "Ошибка удаления поля");
+    } else {
+      await reloadFieldDefs();
     }
   };
 
@@ -412,6 +540,41 @@ export function DealDrawer({
     return items;
   }, [notes, deal.tasks, deal.payments, feedSearch]);
 
+  // Standard AmoCRM static fields reference
+  const standardDealFields = useMemo(() => [
+    { name: "Бюджет сделки", badge: "₸0" },
+    { name: "Тип маркетинга", badge: "6 вариантов" },
+    { name: "Дата запуска кампании", badge: "Дата" },
+    { name: "Бюджет кампании", badge: "Число" },
+    { name: "Тип клиента", badge: "3 варианта" },
+    { name: "Требуется согласование", badge: "Чекбокс" },
+    { name: "Комментарии менеджера", badge: "Текст" },
+    { name: "Источник", badge: "Список" },
+  ], []);
+
+  const standardContactFields = useMemo(() => [
+    { name: "Имя контакта", badge: "Текст" },
+    { name: "Телефон", badge: "Телефон" },
+    { name: "Email", badge: "Email" },
+    { name: "Должность", badge: "Текст" },
+  ], []);
+
+  const standardCompanyFields = useMemo(() => [
+    { name: "Название компании", badge: "Текст" },
+    { name: "Телефон компании", badge: "Телефон" },
+    { name: "Email компании", badge: "Email" },
+  ], []);
+
+  const filteredCustomDealFields = useMemo(() => {
+    const stdSet = new Set(standardDealFields.map((f) => f.name.toLowerCase()));
+    return customDealDefs.filter((f) => !stdSet.has(f.name.toLowerCase()));
+  }, [customDealDefs, standardDealFields]);
+
+  const filteredCustomContactFields = useMemo(() => {
+    const stdSet = new Set(standardContactFields.map((f) => f.name.toLowerCase()));
+    return customContactDefs.filter((f) => !stdSet.has(f.name.toLowerCase()));
+  }, [customContactDefs, standardContactFields]);
+
   return (
     <div className="fixed inset-0 z-50 overflow-hidden flex items-stretch justify-end h-[100dvh] max-h-[100dvh]">
       {/* Backdrop */}
@@ -533,13 +696,15 @@ export function DealDrawer({
 
         {/* ================= PIPELINE & STAGE PROGRESSION BAR ================= */}
         <div className="px-5 py-2.5 bg-[#122232] border-b border-[#1b324d] flex flex-wrap items-center justify-between gap-3 shrink-0">
-          {/* Active Stage & Pipeline Switcher */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center flex-wrap gap-2.5">
+            {/* Воронка */}
             <div className="relative">
               <select
                 value={pipelineId}
+                disabled={isMovingStage}
                 onChange={(e) => handlePipelineSelect(e.target.value)}
-                className="bg-[#162838] border border-[#223c56] text-white text-xs font-bold rounded px-2.5 py-1 pr-6 hover:bg-[#1b324d] focus:outline-none appearance-none cursor-pointer"
+                className="bg-[#162838] border border-[#223c56] text-white text-xs font-bold rounded-lg px-2.5 py-1.5 pr-7 hover:bg-[#1b324d] focus:border-[#2e70e9] focus:outline-none appearance-none cursor-pointer transition-colors"
+                title="Воронка продаж"
               >
                 {pipelines.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -547,49 +712,110 @@ export function DealDrawer({
                   </option>
                 ))}
               </select>
-              <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2 top-2 pointer-events-none" />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-2.5 pointer-events-none" />
             </div>
 
-            <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <span
-                className="w-2.5 h-2.5 rounded-full inline-block"
-                style={{ backgroundColor: currentStage?.color || "#3b82f6" }}
-              />
-              <span>{currentStage?.name || "Этап"}</span>
-            </span>
+            {/* Выпадающий список этапов (Stage Dropdown) */}
+            <div className="relative" ref={stageMenuRef}>
+              <button
+                type="button"
+                disabled={isMovingStage}
+                onClick={() => setIsStageMenuOpen(!isStageMenuOpen)}
+                className="bg-[#162838] border border-[#223c56] hover:border-[#2e70e9] text-white text-xs font-semibold rounded-lg px-3 py-1.5 flex items-center gap-2 hover:bg-[#1b324d] transition-all cursor-pointer shadow-xs disabled:opacity-60"
+                title="Нажмите, чтобы сменить этап сделки"
+              >
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs"
+                  style={{ backgroundColor: currentStage?.color || "#3b82f6" }}
+                />
+                <span className="truncate max-w-[200px]">{currentStage?.name || "Выберите этап"}</span>
+                {currentStage?.type === StageType.WON && (
+                  <span className="text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 px-1.5 py-0.2 rounded font-mono">
+                    Успех
+                  </span>
+                )}
+                {currentStage?.type === StageType.LOST && (
+                  <span className="text-[10px] bg-rose-950/80 text-rose-300 border border-rose-800/80 px-1.5 py-0.2 rounded font-mono">
+                    Отказ
+                  </span>
+                )}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${
+                    isStageMenuOpen ? "rotate-180 text-white" : ""
+                  }`}
+                />
+              </button>
+
+              {/* Dropdown Menu of Stages */}
+              {isStageMenuOpen && (
+                <div className="absolute left-0 mt-1.5 w-64 bg-[#162838] border border-[#223c56] rounded-xl shadow-2xl py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-[#223c56]/60 mb-1 flex items-center justify-between">
+                    <span>Этапы воронки</span>
+                    <span className="text-slate-500 font-mono text-[10px]">{currentPipeline?.stages.length || 0}</span>
+                  </div>
+
+                  <div className="max-h-72 overflow-y-auto py-0.5 space-y-0.5">
+                    {currentPipeline?.stages.map((st) => {
+                      const isCurrent = st.id === stageId;
+                      const isWon = st.type === StageType.WON;
+                      const isLost = st.type === StageType.LOST;
+
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => {
+                            setIsStageMenuOpen(false);
+                            handleStageSelect(st.id);
+                          }}
+                          className={`w-full text-left px-3 py-2 flex items-center justify-between gap-2.5 transition-colors cursor-pointer ${
+                            isCurrent
+                              ? "bg-[#203a54] text-white font-bold"
+                              : "text-slate-300 hover:bg-[#1d354d] hover:text-white"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: st.color || "#60a5fa" }}
+                            />
+                            <span className="truncate">{st.name}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isWon && (
+                              <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800/80 px-1.5 py-0.2 rounded font-mono">
+                                Успех
+                              </span>
+                            )}
+                            {isLost && (
+                              <span className="text-[10px] bg-rose-950 text-rose-300 border border-rose-800/80 px-1.5 py-0.2 rounded font-mono">
+                                Отказ
+                              </span>
+                            )}
+                            {isCurrent && <Check className="w-3.5 h-3.5 text-blue-400" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Moving status indicator */}
+            {isMovingStage && (
+              <span className="text-xs text-blue-400 flex items-center gap-1.5 animate-pulse font-medium">
+                <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                Перемещение...
+              </span>
+            )}
           </div>
 
-          {/* Interactive AmoCRM Stage Segments */}
-          <div className="flex items-center gap-1 overflow-x-auto py-1 max-w-full">
-            {currentPipeline?.stages.map((st, idx) => {
-              const isCurrent = st.id === stageId;
-              const isWon = st.type === StageType.WON;
-              const isLost = st.type === StageType.LOST;
-
-              return (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => handleStageSelect(st.id)}
-                  title={`${st.name} (${st.type})`}
-                  className={`px-3 py-1 text-[11px] font-semibold rounded transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                    isCurrent
-                      ? "bg-[#2e70e9] text-white shadow-md font-bold"
-                      : isWon
-                      ? "bg-emerald-950/70 text-emerald-300 hover:bg-emerald-900/80 border border-emerald-800/40"
-                      : isLost
-                      ? "bg-rose-950/70 text-rose-300 hover:bg-rose-900/80 border border-rose-800/40"
-                      : "bg-[#162838] text-slate-400 hover:text-slate-200 hover:bg-[#1e3851] border border-[#223c56]"
-                  }`}
-                >
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{ backgroundColor: st.color || "#60a5fa" }}
-                  />
-                  <span>{st.name}</span>
-                </button>
-              );
-            })}
+          {/* Creation date */}
+          <div className="text-[11px] text-slate-400 hidden sm:flex items-center gap-1 font-mono">
+            <span>Создана:</span>
+            <span className="text-slate-300">{formatDate(deal.createdAt)}</span>
           </div>
         </div>
 
@@ -687,8 +913,13 @@ export function DealDrawer({
               {/* Настроить Tab / Button */}
               <button
                 type="button"
-                onClick={() => setIsFieldSettingsOpen(true)}
-                className="text-xs font-medium text-slate-400 hover:text-white flex items-center gap-1 px-2 py-1 rounded hover:bg-[#162838] transition-colors cursor-pointer"
+                onClick={() => setLeftTab(leftTab === "settings" ? "general" : "settings")}
+                className={`text-xs font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors cursor-pointer ${
+                  leftTab === "settings"
+                    ? "bg-[#2e70e9] text-white shadow-xs"
+                    : "text-slate-400 hover:text-white hover:bg-[#162838]"
+                }`}
+                title="Настройка свойств полей и групп (amoCRM)"
               >
                 <Settings className="w-3.5 h-3.5" />
                 <span>Настроить</span>
@@ -697,6 +928,420 @@ export function DealDrawer({
 
             {/* Scrollable Fields Container */}
             <div className="flex-1 overflow-y-auto p-5 space-y-6">
+              {/* ====== TAB: НАСТРОИТЬ ПОЛЯ (amoCRM direct inline config) ====== */}
+              {leftTab === "settings" && (
+                <div className="space-y-6 animate-in fade-in duration-200">
+                  {/* Settings Header banner */}
+                  <div className="p-4 rounded-xl bg-[#142637] border border-[#223c56] flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                        <Sliders className="w-4 h-4 text-[#3b82f6]" />
+                        <span>Настройка свойств полей и групп</span>
+                      </h3>
+                      <p className="text-[11px] text-[#7e9bb5] mt-1 leading-relaxed">
+                        В DAMA CRM вы можете добавлять свои уникальные поля и использовать их для любых фильтров и отчетов.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLeftTab("general")}
+                      className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-[#1d354d] transition-colors cursor-pointer shrink-0"
+                      title="Закрыть настройки и вернуться к карточке"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Groups / Tabs Bar (amoCRM style tabs: :: Основное, :: Статистика, :: Файлы) */}
+                  <div className="px-3 py-2 bg-[#0b1723] rounded-xl border border-[#1d354d] flex items-center gap-2 overflow-x-auto text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsGroupTab("general")}
+                      className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        settingsGroupTab === "general"
+                          ? "bg-[#1f3b57] text-white border border-[#2e5a85] shadow-xs"
+                          : "text-[#7e9bb5] hover:text-white hover:bg-[#152738]"
+                      }`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-[#52779a]" />
+                      <span>Основное</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSettingsGroupTab("stats")}
+                      className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        settingsGroupTab === "stats"
+                          ? "bg-[#1f3b57] text-white border border-[#2e5a85] shadow-xs"
+                          : "text-[#7e9bb5] hover:text-white hover:bg-[#152738]"
+                      }`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-[#52779a]" />
+                      <span>Статистика</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSettingsGroupTab("files")}
+                      className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        settingsGroupTab === "files"
+                          ? "bg-[#1f3b57] text-white border border-[#2e5a85] shadow-xs"
+                          : "text-[#7e9bb5] hover:text-white hover:bg-[#152738]"
+                      }`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-[#52779a]" />
+                      <span>Файлы</span>
+                    </button>
+                  </div>
+
+                  {inlineFieldError && (
+                    <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{inlineFieldError}</span>
+                    </div>
+                  )}
+
+                  {/* Section 1: Поля сделки (Основное) */}
+                  <div className="space-y-2.5">
+                    <div className="text-xs font-bold uppercase tracking-wider text-[#7e9bb5] flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Briefcase className="w-3.5 h-3.5 text-[#3b82f6]" />
+                        <span>Поля сделки (Группа «Основное»)</span>
+                      </span>
+                      <span className="text-[11px] font-normal text-slate-500">
+                        {standardDealFields.length + filteredCustomDealFields.length} полей
+                      </span>
+                    </div>
+
+                    {/* Standard Deal fields */}
+                    <div className="space-y-1.5">
+                      {standardDealFields.map((f) => (
+                        <div
+                          key={f.name}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#132537] border border-[#1e3954] flex items-center justify-between gap-3 text-xs text-slate-200"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <GripVertical className="w-3.5 h-3.5 text-[#486e92] shrink-0" />
+                            <span className="font-medium truncate">{f.name}</span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md bg-[#19324a] text-[#86a8c7] text-[11px] font-mono border border-[#244668] shrink-0">
+                            {f.badge}
+                          </span>
+                        </div>
+                      ))}
+
+                      {/* Custom Deal fields */}
+                      {filteredCustomDealFields.map((f) => (
+                        <div
+                          key={f.id}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#14283c] border border-blue-500/30 flex items-center justify-between gap-3 text-xs text-slate-200 hover:border-blue-500/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <GripVertical className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                            <span className="font-semibold text-white truncate">{f.name}</span>
+                            <span className="text-[10px] text-blue-300 font-mono bg-blue-950/60 px-1.5 py-0.2 rounded border border-blue-800/50">
+                              кастомное
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="px-2 py-0.5 rounded-md bg-[#19324a] text-[#86a8c7] text-[11px] font-mono border border-[#244668]">
+                              {f.fieldType === "SELECT"
+                                ? `${f.options?.length || 0} вар.`
+                                : f.fieldType === "DATE"
+                                ? "Дата"
+                                : f.fieldType === "NUMBER"
+                                ? "Число"
+                                : "Текст"}
+                            </span>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleInlineDeleteField(f.id, f.name)}
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                title="Удалить поле"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add Field Inline Form or Button */}
+                    {inlineAddingTarget === "DEAL" ? (
+                      <form
+                        onSubmit={handleInlineAddField}
+                        className="p-3.5 rounded-xl bg-[#162a3f] border border-[#2e5a85] space-y-3"
+                      >
+                        <div className="text-xs font-bold text-white flex items-center justify-between">
+                          <span>Новое поле для сделки</span>
+                          <button
+                            type="button"
+                            onClick={() => setInlineAddingTarget(null)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">Название поля *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="Например: Ссылка на бриф"
+                              value={inlineNewFieldName}
+                              onChange={(e) => setInlineNewFieldName(e.target.value)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">Тип поля</label>
+                            <select
+                              value={inlineNewFieldType}
+                              onChange={(e) => setInlineNewFieldType(e.target.value as any)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            >
+                              <option value="TEXT">Текст (строка)</option>
+                              <option value="NUMBER">Число</option>
+                              <option value="DATE">Дата (календарь)</option>
+                              <option value="SELECT">Список (варианты)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {inlineNewFieldType === "SELECT" && (
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">
+                              Варианты выбора (через запятую)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Вариант 1, Вариант 2, Вариант 3"
+                              value={inlineNewFieldOptions}
+                              onChange={(e) => setInlineNewFieldOptions(e.target.value)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setInlineAddingTarget(null)}
+                            className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                          >
+                            Отмена
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isInlineSubmitting || !inlineNewFieldName.trim()}
+                            className="px-3.5 py-1.5 rounded-lg bg-[#2e70e9] hover:bg-[#255ec4] text-white text-xs font-semibold disabled:opacity-50 cursor-pointer shadow-xs"
+                          >
+                            {isInlineSubmitting ? "Сохранение..." : "Сохранить поле"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInlineAddingTarget("DEAL");
+                          setInlineNewFieldName("");
+                          setInlineNewFieldOptions("");
+                          setInlineNewFieldType("TEXT");
+                        }}
+                        className="w-full py-2.5 rounded-xl border border-dashed border-[#244668] hover:border-[#2e70e9] hover:bg-[#132537] text-xs font-semibold text-[#6891b8] hover:text-[#2e70e9] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Добавить поле</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Section 2: Поля контактов */}
+                  <div className="space-y-2.5 pt-4 border-t border-[#1d354d]">
+                    <div className="text-xs font-bold uppercase tracking-wider text-[#7e9bb5] flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-[#10b981]" />
+                        <span>Поля контактов</span>
+                      </span>
+                      <span className="text-[11px] font-normal text-slate-500">
+                        {standardContactFields.length + filteredCustomContactFields.length} полей
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {standardContactFields.map((f) => (
+                        <div
+                          key={f.name}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#132537] border border-[#1e3954] flex items-center justify-between gap-3 text-xs text-slate-200"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <GripVertical className="w-3.5 h-3.5 text-[#486e92] shrink-0" />
+                            <span className="font-medium truncate">{f.name}</span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md bg-[#19324a] text-[#86a8c7] text-[11px] font-mono border border-[#244668]">
+                            {f.badge}
+                          </span>
+                        </div>
+                      ))}
+
+                      {filteredCustomContactFields.map((f) => (
+                        <div
+                          key={f.id}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#14283c] border border-emerald-500/30 flex items-center justify-between gap-3 text-xs text-slate-200"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <GripVertical className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            <span className="font-semibold text-white truncate">{f.name}</span>
+                            <span className="text-[10px] text-emerald-300 font-mono bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-800/50">
+                              кастомное
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-[#19324a] text-[#86a8c7] text-[11px] font-mono border border-[#244668]">
+                              {f.fieldType === "SELECT" ? "Список" : f.fieldType === "DATE" ? "Дата" : f.fieldType === "NUMBER" ? "Число" : "Текст"}
+                            </span>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleInlineDeleteField(f.id, f.name)}
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 cursor-pointer"
+                                title="Удалить поле"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {inlineAddingTarget === "CONTACT" ? (
+                      <form
+                        onSubmit={handleInlineAddField}
+                        className="p-3.5 rounded-xl bg-[#162a3f] border border-[#2e5a85] space-y-3"
+                      >
+                        <div className="text-xs font-bold text-white flex items-center justify-between">
+                          <span>Новое поле для контакта</span>
+                          <button
+                            type="button"
+                            onClick={() => setInlineAddingTarget(null)}
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">Название поля *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="Например: Telegram username"
+                              value={inlineNewFieldName}
+                              onChange={(e) => setInlineNewFieldName(e.target.value)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">Тип поля</label>
+                            <select
+                              value={inlineNewFieldType}
+                              onChange={(e) => setInlineNewFieldType(e.target.value as any)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            >
+                              <option value="TEXT">Текст (строка)</option>
+                              <option value="NUMBER">Число</option>
+                              <option value="DATE">Дата (календарь)</option>
+                              <option value="SELECT">Список</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {inlineNewFieldType === "SELECT" && (
+                          <div>
+                            <label className="text-[11px] text-[#7e9bb5] block mb-1">
+                              Варианты (через запятую)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Вариант 1, Вариант 2"
+                              value={inlineNewFieldOptions}
+                              onChange={(e) => setInlineNewFieldOptions(e.target.value)}
+                              className="w-full px-3 py-1.5 bg-[#0f1d2b] border border-[#223c56] rounded-lg text-xs text-white focus:outline-none focus:border-[#2e70e9]"
+                            />
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setInlineAddingTarget(null)}
+                            className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                          >
+                            Отмена
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isInlineSubmitting || !inlineNewFieldName.trim()}
+                            className="px-3.5 py-1.5 rounded-lg bg-[#2e70e9] hover:bg-[#255ec4] text-white text-xs font-semibold disabled:opacity-50 cursor-pointer shadow-xs"
+                          >
+                            {isInlineSubmitting ? "Сохранение..." : "Сохранить поле"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInlineAddingTarget("CONTACT");
+                          setInlineNewFieldName("");
+                          setInlineNewFieldOptions("");
+                          setInlineNewFieldType("TEXT");
+                        }}
+                        className="w-full py-2.5 rounded-xl border border-dashed border-[#244668] hover:border-[#10b981] hover:bg-[#132537] text-xs font-semibold text-[#6891b8] hover:text-[#10b981] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Добавить поле</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Section 3: Поля компаний */}
+                  <div className="space-y-2.5 pt-4 border-t border-[#1d354d]">
+                    <div className="text-xs font-bold uppercase tracking-wider text-[#7e9bb5] flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5 text-[#f59e0b]" />
+                        <span>Поля компаний</span>
+                      </span>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {standardCompanyFields.map((f) => (
+                        <div
+                          key={f.name}
+                          className="px-3.5 py-2.5 rounded-xl bg-[#132537] border border-[#1e3954] flex items-center justify-between gap-3 text-xs text-slate-200"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <GripVertical className="w-3.5 h-3.5 text-[#486e92] shrink-0" />
+                            <span className="font-medium truncate">{f.name}</span>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md bg-[#19324a] text-[#86a8c7] text-[11px] font-mono border border-[#244668]">
+                            {f.badge}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {leftTab === "general" && (
                 <>
                   {/* ====== SECTION 1: DEAL PARAMETERS ====== */}
@@ -976,6 +1621,18 @@ export function DealDrawer({
                           </div>
                         </div>
                       ))}
+
+                    {/* Quick switch to field settings */}
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setLeftTab("settings")}
+                        className="text-xs text-[#2e70e9] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Настроить / добавить поля сделки</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* ====== SECTION 2: AMO CONTACT CARD ====== */}
@@ -1101,21 +1758,78 @@ export function DealDrawer({
                             {def.name}
                           </span>
                           <div className="col-span-7">
-                            <input
-                              type="text"
-                              placeholder="..."
-                              value={(contactCustomFields[def.name] as string) || ""}
-                              onChange={(e) =>
-                                setContactCustomFields((prev) => ({
-                                  ...prev,
-                                  [def.name]: e.target.value,
-                                }))
-                              }
-                              className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
-                            />
+                            {def.fieldType === "SELECT" ? (
+                              <select
+                                value={(contactCustomFields[def.name] as string) || ""}
+                                onChange={(e) =>
+                                  setContactCustomFields((prev) => ({
+                                    ...prev,
+                                    [def.name]: e.target.value,
+                                  }))
+                                }
+                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
+                              >
+                                <option value="">...</option>
+                                {(def.options || []).map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : def.fieldType === "DATE" ? (
+                              <input
+                                type="date"
+                                value={(contactCustomFields[def.name] as string) || ""}
+                                onChange={(e) =>
+                                  setContactCustomFields((prev) => ({
+                                    ...prev,
+                                    [def.name]: e.target.value,
+                                  }))
+                                }
+                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
+                              />
+                            ) : def.fieldType === "NUMBER" ? (
+                              <input
+                                type="number"
+                                placeholder="..."
+                                value={(contactCustomFields[def.name] as string) || ""}
+                                onChange={(e) =>
+                                  setContactCustomFields((prev) => ({
+                                    ...prev,
+                                    [def.name]: e.target.value,
+                                  }))
+                                }
+                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                placeholder="..."
+                                value={(contactCustomFields[def.name] as string) || ""}
+                                onChange={(e) =>
+                                  setContactCustomFields((prev) => ({
+                                    ...prev,
+                                    [def.name]: e.target.value,
+                                  }))
+                                }
+                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
+                              />
+                            )}
                           </div>
                         </div>
                       ))}
+
+                    {/* Quick switch to contact field settings */}
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setLeftTab("settings")}
+                        className="text-xs text-[#2e70e9] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Настроить / добавить поля контакта</span>
+                      </button>
+                    </div>
 
                     {/* Quick Add buttons */}
                     <div className="pt-2 flex items-center gap-3 text-xs">
@@ -1196,23 +1910,46 @@ export function DealDrawer({
 
             {/* ====== BOTTOM SAVE BAR ====== */}
             <div className="px-5 py-3 border-t border-[#1b324d] bg-[#122232] flex items-center justify-between shrink-0">
-              <button
-                type="button"
-                onClick={handleSaveFull}
-                disabled={isSaving}
-                className="px-5 py-2 bg-[#2e70e9] hover:bg-[#2358b8] text-white font-semibold text-xs rounded transition-colors shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
-              >
-                <Check className="w-4 h-4" />
-                <span>{isSaving ? "Сохранение..." : "Сохранить"}</span>
-              </button>
+              {leftTab === "settings" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setLeftTab("general")}
+                    className="px-5 py-2 bg-[#2e70e9] hover:bg-[#2358b8] text-white font-semibold text-xs rounded transition-colors shadow-md cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Готово</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={onClose}
-                className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-              >
-                Отмена
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setLeftTab("general")}
+                    className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                  >
+                    Вернуться к полям
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleSaveFull}
+                    disabled={isSaving}
+                    className="px-5 py-2 bg-[#2e70e9] hover:bg-[#2358b8] text-white font-semibold text-xs rounded transition-colors shadow-md disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{isSaving ? "Сохранение..." : "Сохранить"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                  >
+                    Отмена
+                  </button>
+                </>
+              )}
             </div>
           </div>
 

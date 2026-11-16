@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { DealCustomFieldDef } from "../types";
 import {
   createDealFieldDefinitionAction,
@@ -37,6 +38,11 @@ export function DealFieldSettingsModal({
   onFieldsChanged,
 }: DealFieldSettingsModalProps) {
   const [activeTab, setActiveTab] = useState<"general" | "stats" | "files">("general");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Inline "Add Field" state
   const [addingTarget, setAddingTarget] = useState<"DEAL" | "CONTACT" | null>(null);
@@ -130,12 +136,12 @@ export function DealFieldSettingsModal({
     (f) => !standardContactFieldNames.has(f.name.toLowerCase())
   );
 
-  return (
-    <div className="fixed inset-0 z-60 overflow-hidden flex items-center justify-center p-3 sm:p-6">
+  const modalContent = (
+    <div className="fixed inset-0 z-[100] overflow-hidden flex items-center justify-center p-3 sm:p-6">
       {/* Backdrop */}
       <div
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-200"
+        className="fixed inset-0 bg-black/70 backdrop-blur-xs transition-opacity duration-200"
       />
 
       {/* Modal Card - amoCRM exact dark style */}
@@ -551,4 +557,10 @@ export function DealFieldSettingsModal({
       </div>
     </div>
   );
+
+  if (mounted && typeof document !== "undefined") {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }
