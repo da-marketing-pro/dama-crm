@@ -7,8 +7,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   try {
-    const url = new URL(req.url);
-    const origin = url.origin || "https://crm.da-marketing.pro";
+    const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+    const isPublic = host && !host.includes("0.0.0.0") && !host.includes("localhost") && !host.includes("127.0.0.1");
+    const origin = isPublic ? `https://${host}` : "https://crm.da-marketing.pro";
 
     // Ищем задачи, назначенные администратору (Admin) или всем активным пользователям
     const tasks = await prisma.task.findMany({
