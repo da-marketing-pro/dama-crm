@@ -21,6 +21,7 @@ interface DealsKanbanProps {
   onPipelineMoved?: () => void;
   currencyRateUsd?: number;
   currencyRateRub?: number;
+  isSearchActive?: boolean;
 }
 
 export function DealsKanban({
@@ -31,6 +32,7 @@ export function DealsKanban({
   onPipelineMoved,
   currencyRateUsd = 495,
   currencyRateRub = 5.2,
+  isSearchActive = false,
 }: DealsKanbanProps) {
   const [draggedDealId, setDraggedDealId] = useState<string | null>(null);
   const [activeStageId, setActiveStageId] = useState<string | null>(null);
@@ -136,15 +138,17 @@ export function DealsKanban({
               <div className="p-2.5 space-y-2.5 flex-1 overflow-y-auto max-h-[calc(100vh-320px)] min-h-[140px]">
                 {stage.deals.length === 0 ? (
                   <div className="h-28 flex flex-col items-center justify-center text-center p-3 border border-dashed border-slate-300/80 rounded-xl text-slate-400 text-[11px] gap-1.5">
-                    <span>Перетащите сделку сюда</span>
-                    <button
-                      type="button"
-                      onClick={() => onCreateDealAtStage?.(stage.id)}
-                      className="text-[10px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 hover:underline cursor-pointer"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Создать сделку</span>
-                    </button>
+                    <span>{isSearchActive ? "Нет сделок по запросу" : "Перетащите сделку сюда"}</span>
+                    {!isSearchActive && (
+                      <button
+                        type="button"
+                        onClick={() => onCreateDealAtStage?.(stage.id)}
+                        className="text-[10px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 hover:underline cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Создать сделку</span>
+                      </button>
+                    )}
                   </div>
                 ) : (
                   stage.deals.map((deal) => (
