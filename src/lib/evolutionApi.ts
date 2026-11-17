@@ -132,15 +132,20 @@ function extractEvoError(status: number, body: unknown): string {
   if (body && typeof body === "object") {
     const obj = body as Record<string, unknown>;
     const resp = obj.response as Record<string, unknown> | undefined;
-    if (resp?.message) {
-      if (Array.isArray(resp.message)) return resp.message.join(", ");
-      return String(resp.message);
-    }
-    if (obj.message) {
-      if (Array.isArray(obj.message)) return obj.message.join(", ");
-      return String(obj.message);
-    }
-    if (obj.error) return String(obj.error);
+    const formatMsg = (msg: unknown): string => {
+      if (typeof msg === "string") return msg;
+      if (Array.isArray(msg)) {
+        return msg.map((m) => (typeof m === "object" ? JSON.stringify(m) : String(m))).join(", ");
+      }
+      if (typeof msg === "object" && msg !== null) {
+        return JSON.stringify(msg);
+      }
+      return String(msg);
+    };
+
+    if (resp?.message) return formatMsg(resp.message);
+    if (obj.message) return formatMsg(obj.message);
+    if (obj.error) return formatMsg(obj.error);
   }
   if (status === 401 || status === 403) {
     return "Неверный API-ключ Evolution API (проверьте AUTHENTICATION_API_KEY)";
@@ -239,12 +244,19 @@ export async function resolveQrDataUrl(payload: Record<string, unknown> | undefi
   if (!payload) return { qrBase64: null, pairingCode: null };
 
   const qrBlock = (payload.qrcode as Record<string, unknown> | undefined) || payload;
-  const rawBase64 = typeof qrBlock.base64 === "string" ? qrBlock.base64.trim() : "";
-  const rawCode = typeof qrBlock.code === "string" ? qrBlock.code.trim() : "";
+  const rawBase64 =
+    (typeof qrBlock.base64 === "string" ? qrBlock.base64.trim() : "") ||
+    (typeof payload.base64 === "string" ? payload.base64.trim() : "");
+  const rawCode =
+    (typeof qrBlock.code === "string" ? qrBlock.code.trim() : "") ||
+    (typeof payload.code === "string" ? payload.code.trim() : "");
   const pairingCode =
-    typeof qrBlock.pairingCode === "string" && qrBlock.pairingCode.trim()
+    (typeof qrBlock.pairingCode === "string" && qrBlock.pairingCode.trim()
       ? qrBlock.pairingCode.trim()
-      : null;
+      : null) ||
+    (typeof payload.pairingCode === "string" && payload.pairingCode.trim()
+      ? payload.pairingCode.trim()
+      : null);
 
   if (rawBase64) {
     const normalized = rawBase64.startsWith("data:image/")
@@ -537,22 +549,31 @@ export async function ensureInstanceAndGetQr(params: {
   let sessionRecreated = false;
 
   if (forceReset && currentStatus.state !== "not_found") {
+    // 1. Мягкий logout сокета WhatsApp Baileys
+    await evoFetch(apiUrl, apiKey, `/instance/logout/${encodeURIComponent(instanceName)}`, {
+      method: "DELETE",
+    });
+
+    // 2. Попытка полного удаления инстанса из Evolution API
     const delRes = await evoFetch(
       apiUrl,
       apiKey,
       `/instance/delete/${encodeURIComponent(instanceName)}`,
       { method: "DELETE" }
     );
-    if (!delRes.ok && delRes.status !== 404) {
-      return { success: false, error: delRes.error || "Не удалось сбросить сессию инстанса" };
+
+    if (delRes.ok || delRes.status === 404) {
+      await new Promise((r) => setTimeout(r, 700));
+      const recreateRes = await createInstanceWithQr();
+      if (recreateRes.ok) {
+        createPayload = recreateRes.data;
+        sessionRecreated = true;
+      }
+    } else {
+      // Если удаление запрещено (например DEL_INSTANCE=false), перезапускаем существующий инстанс
+      await restartDisconnectedInstance({ apiUrl, apiKey, instanceName });
+      await new Promise((r) => setTimeout(r, 1200));
     }
-    await new Promise((r) => setTimeout(r, 700));
-    const recreateRes = await createInstanceWithQr();
-    if (!recreateRes.ok) {
-      return { success: false, error: recreateRes.error || "Не удалось пересоздать инстанс" };
-    }
-    createPayload = recreateRes.data;
-    sessionRecreated = true;
   } else if (currentStatus.state === "not_found") {
     const createRes = await createInstanceWithQr();
     if (!createRes.ok) {

@@ -152,8 +152,16 @@ export async function requestWhatsappQrCode(params: {
     }
 
     const nextName = params.name?.trim() || instance.name;
-    const nextApiUrl = params.apiUrl !== undefined ? params.apiUrl.trim() : instance.apiUrl || "";
-    const nextApiKey = params.apiKey !== undefined ? params.apiKey.trim() : instance.apiKey || "";
+    const nextApiUrl =
+      (params.apiUrl && params.apiUrl.trim()) ||
+      instance.apiUrl ||
+      process.env.EVOLUTION_API_URL ||
+      "https://wa.da-marketing.pro";
+    const nextApiKey =
+      (params.apiKey && params.apiKey.trim()) ||
+      instance.apiKey ||
+      process.env.EVOLUTION_API_KEY ||
+      "";
 
     if (!nextApiUrl || nextApiUrl.includes("api.waha.dev")) {
       return {
@@ -228,7 +236,11 @@ export async function requestWhatsappQrCode(params: {
         status: nextStatus,
         ...(evoResult.connected
           ? { lastQrCode: null, lastPairingCode: null, lastQrUpdatedAt: null }
-          : {}),
+          : {
+              lastQrCode: resolvedQrBase64,
+              lastPairingCode: resolvedPairingCode,
+              lastQrUpdatedAt: resolvedQrBase64 || resolvedPairingCode ? new Date() : null,
+            }),
         ...(evoResult.phoneNumber ? { phoneNumber: evoResult.phoneNumber } : {}),
       },
     });

@@ -481,7 +481,7 @@ export function WhatsappSettingsView({
               ) : (
                 <button
                   type="button"
-                  onClick={() => handleOpenAndFetchQr({ forceReset: true })}
+                  onClick={() => handleOpenAndFetchQr()}
                   disabled={!isAdmin || qrLoading}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
                 >
@@ -1269,7 +1269,7 @@ export function WhatsappSettingsView({
                 <button
                   type="button"
                   onClick={() =>
-                    handleOpenAndFetchQr({ forceReset: true, pairingPhone: pairingPhoneInput })
+                    handleOpenAndFetchQr({ pairingPhone: pairingPhoneInput })
                   }
                   disabled={qrLoading || pairingPhoneInput.replace(/\D/g, "").length < 10}
                   className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-40 whitespace-nowrap"

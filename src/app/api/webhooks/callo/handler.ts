@@ -7,11 +7,6 @@ import {
   summarizeCalloParams,
   verifyCalloWebhookToken,
 } from "@/lib/calloWebhook";
-import {
-  getEvolutionStatus,
-  normalizeEvolutionInstanceName,
-  ensureInstanceAndGetQr,
-} from "@/lib/evolutionApi";
 
 export async function handleCalloWebhookRequest(
   req: NextRequest,
@@ -57,38 +52,10 @@ export async function handleCalloWebhookRequest(
         req.nextUrl.searchParams.has("status"));
 
     if (isInspection) {
-      const instanceName = normalizeEvolutionInstanceName(instance.name, instance.id);
-      const evoCheck = await getEvolutionStatus({
-        apiUrl: instance.apiUrl || "https://wa.da-marketing.pro",
-        apiKey: instance.apiKey || "",
-        instanceName,
-      });
-
-      let testQrResult: unknown = null;
-      if (req.nextUrl.searchParams.has("test_qr")) {
-        testQrResult = await ensureInstanceAndGetQr({
-          apiUrl: instance.apiUrl || "https://wa.da-marketing.pro",
-          apiKey: instance.apiKey || "",
-          instanceName,
-          forceReset: req.nextUrl.searchParams.has("force_reset"),
-        });
-      }
-
       return NextResponse.json({
         ok: true,
         instanceId: instance.id,
-        instanceName: instance.name,
-        normalizedInstanceName: instanceName,
         instancePhone: instance.phoneNumber,
-        instanceStatus: instance.status,
-        apiUrl: instance.apiUrl,
-        apiKeyMasked: instance.apiKey
-          ? `${instance.apiKey.slice(0, 4)}...${instance.apiKey.slice(-4)} (len ${instance.apiKey.length})`
-          : "EMPTY",
-        lastQrUpdatedAt: instance.lastQrUpdatedAt,
-        hasLastQrCode: Boolean(instance.lastQrCode),
-        evoCheck,
-        testQrResult,
         lastCalloWebhook: instance.lastCalloWebhook,
       });
     }
