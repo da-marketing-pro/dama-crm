@@ -924,27 +924,14 @@ export function WhatsappSettingsView({
                   </div>
                 </div>
 
-                {/* Базовый URL (без параметров) */}
-                <div className="space-y-1 pt-1">
-                  <label className="text-[10px] text-slate-500">
-                    Базовый адрес (без параметров):
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-mono text-slate-600 truncate select-all">
-                      {calloWebhookUrl}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(calloWebhookUrl);
-                        setCopiedCalloWebhook(true);
-                        setTimeout(() => setCopiedCalloWebhook(false), 2000);
-                      }}
-                      className="px-2.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-[11px] font-medium flex items-center gap-1 shrink-0 cursor-pointer"
-                    >
-                      {copiedCalloWebhook ? "Скопировано" : "Копия"}
-                    </button>
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed space-y-1">
+                  <div className="font-bold text-amber-950 flex items-center gap-1.5">
+                    <span>⚠️ Важное правило для Callo.com:</span>
                   </div>
+                  <p>
+                    В Callo в поле URL обязательно вставляйте оранжевую ссылку выше <strong>вместе с <code>?ct_phone&ct_call_id...</code></strong>. 
+                    Если вставить ссылку без параметров, робот Callo отправляет пустой POST-запрос без номера абонента, и CRM не может создать лид.
+                  </p>
                 </div>
 
                 <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed pt-1 border-t border-slate-200">
