@@ -130,9 +130,9 @@ export function DealCard({
         </span>
       </div>
 
-      {/* 2) Источник */}
-      {dealSource && (
-        <div className="flex items-center">
+      {/* 2) Источник & Теги */}
+      <div className="flex flex-wrap items-center gap-1">
+        {dealSource && (
           <span
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-semibold ${
               isTargetSource
@@ -143,10 +143,33 @@ export function DealCard({
             }`}
           >
             <Tag className="w-2.5 h-2.5 shrink-0" />
-            <span className="truncate">{dealSource}</span>
+            <span className="truncate max-w-[140px]">{dealSource}</span>
           </span>
-        </div>
-      )}
+        )}
+
+        {/* Теги сделки */}
+        {deal.tags?.map((t, idx) => (
+          <span
+            key={`d-${idx}`}
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold"
+            title={`Тег сделки: ${t}`}
+          >
+            <Tag className="w-2 h-2 text-blue-500 shrink-0" />
+            <span className="truncate max-w-[110px]">{t}</span>
+          </span>
+        ))}
+
+        {/* Теги контакта (например: Не квалифицированный) */}
+        {deal.contact.tags?.map((t, idx) => (
+          <span
+            key={`c-${idx}`}
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-semibold"
+            title={`Тег контакта: ${t}`}
+          >
+            <span className="truncate max-w-[110px]">#{t}</span>
+          </span>
+        ))}
+      </div>
 
       {/* 3) Имя+фамилия (если есть) & 4) Номер телефона */}
       <div className="space-y-1 text-[11px]">

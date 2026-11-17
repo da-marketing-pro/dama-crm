@@ -98,6 +98,7 @@ model Contact {
   company      String?
   assignedToId String?
   assignedTo   User?    @relation("AssignedContacts", fields: [assignedToId], references: [id], onDelete: SetNull)
+  tags         String[] @default([])
   customFields Json?    @default("{}")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -135,9 +136,10 @@ model CustomFieldDefinition {
   fieldType  FieldType  @default(TEXT)
   options    Json?      @default("[]")
   isRequired Boolean    @default(false)
+  order      Int        @default(0)
   createdAt  DateTime   @default(now())
 
-  @@index([entityType])
+  @@index([entityType, order])
   @@map("custom_field_definitions")
 }
 
@@ -186,6 +188,7 @@ model Deal {
   totalBudget           Float     @default(0)
   currency              Currency  @default(KZT)
   exchangeRateAtCreation Float    @default(1.0)
+  tags                  String[]  @default([])
   customFields          Json?     @default("{}")
   closedAt              DateTime?
   createdAt             DateTime  @default(now())

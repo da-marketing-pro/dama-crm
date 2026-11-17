@@ -41,6 +41,7 @@ export interface DealCustomFieldDef {
   fieldType: "TEXT" | "NUMBER" | "DATE" | "SELECT";
   options?: string[];
   isRequired?: boolean;
+  order?: number;
 }
 
 export interface DealItem {
@@ -50,6 +51,7 @@ export interface DealItem {
   currency: Currency;
   exchangeRateAtCreation: number;
   source?: string | null;
+  tags?: string[];
   customFields?: Record<string, unknown> | null;
   createdAt: Date | string;
   closedAt?: Date | string | null;
@@ -64,6 +66,7 @@ export interface DealItem {
     phone: string;
     company?: string | null;
     email?: string | null;
+    tags?: string[];
     customFields?: Record<string, unknown> | null;
     notes?: DealNoteItem[];
   };

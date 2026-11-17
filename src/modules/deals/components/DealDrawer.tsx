@@ -18,6 +18,7 @@ import {
   deleteDeal,
   moveDealStage,
   moveDealPipeline,
+  getDistinctTagsAction,
 } from "../actions";
 import { addPayment, deletePayment } from "@/modules/payments/actions";
 import { createTask, completeTask } from "@/modules/tasks/actions";
@@ -139,6 +140,48 @@ export function DealDrawer({
     (deal.contact.customFields as Record<string, unknown>) || {}
   );
 
+  // Tags state for deal
+  const [dealTags, setDealTags] = useState<string[]>(
+    deal.tags && deal.tags.length > 0
+      ? deal.tags
+      : Array.isArray((deal.customFields as any)?.tags)
+      ? (deal.customFields as any).tags
+      : []
+  );
+  const [isAddingDealTag, setIsAddingDealTag] = useState(false);
+  const [newDealTagText, setNewDealTagText] = useState("");
+  const [knownDealTags, setKnownDealTags] = useState<string[]>([
+    "Рекламная кампания",
+    "Автообзвон",
+    "Таргет",
+    "VIP",
+    "Партнер",
+  ]);
+
+  // Tags state for contact
+  const [contactTags, setContactTags] = useState<string[]>(
+    deal.contact?.tags && deal.contact.tags.length > 0
+      ? deal.contact.tags
+      : Array.isArray((deal.contact?.customFields as any)?.tags)
+      ? (deal.contact.customFields as any).tags
+      : []
+  );
+  const [contactTagInput, setContactTagInput] = useState("");
+  const [showContactTagSuggestions, setShowContactTagSuggestions] = useState(false);
+  const [knownContactTags, setKnownContactTags] = useState<string[]>([
+    "Не квалифицированный",
+    "Лид",
+    "Партнер",
+    "В работе",
+    "СПАМ",
+    "Постоянный",
+  ]);
+  const [quickContactTags, setQuickContactTags] = useState<string[]>([
+    "Не квалифицированный",
+    "Лид",
+    "Партнер",
+  ]);
+
   // Field Settings Modal state
   const [isFieldSettingsOpen, setIsFieldSettingsOpen] = useState(false);
   const [customDealDefs, setCustomDealDefs] = useState<DealCustomFieldDef[]>(
@@ -204,7 +247,7 @@ export function DealDrawer({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  // Fetch field definitions on mount or modal close
+  // Fetch field definitions and tags on mount or modal close
   const reloadFieldDefs = async () => {
     const res = await getDealFieldDefinitionsAction();
     if (res.success) {
@@ -213,9 +256,75 @@ export function DealDrawer({
     }
   };
 
+  const reloadTags = async () => {
+    const res = await getDistinctTagsAction();
+    if (res.success) {
+      if (res.dealTags?.length) setKnownDealTags(res.dealTags);
+      if (res.contactTags?.length) setKnownContactTags(res.contactTags);
+      if (res.recentContactTags?.length) setQuickContactTags(res.recentContactTags);
+    }
+  };
+
   useEffect(() => {
     reloadFieldDefs();
+    reloadTags();
   }, []);
+
+  const handleAddDealTag = async (tagToAdd: string) => {
+    const clean = tagToAdd.trim();
+    if (!clean) return;
+    if (!dealTags.includes(clean)) {
+      const nextTags = [...dealTags, clean];
+      setDealTags(nextTags);
+      setNewDealTagText("");
+      setIsAddingDealTag(false);
+      await updateDealFullAction(deal.id, { tags: nextTags });
+      onDealUpdated?.();
+    } else {
+      setNewDealTagText("");
+      setIsAddingDealTag(false);
+    }
+  };
+
+  const handleRemoveDealTag = async (indexToRemove: number) => {
+    const nextTags = dealTags.filter((_, i) => i !== indexToRemove);
+    setDealTags(nextTags);
+    await updateDealFullAction(deal.id, { tags: nextTags });
+    onDealUpdated?.();
+  };
+
+  const handleAddContactTag = async (tagToAdd: string) => {
+    const clean = tagToAdd.trim();
+    if (!clean) return;
+    if (!contactTags.includes(clean)) {
+      const nextTags = [...contactTags, clean];
+      setContactTags(nextTags);
+      setContactTagInput("");
+      setShowContactTagSuggestions(false);
+      await updateDealFullAction(deal.id, {
+        contact: {
+          id: deal.contactId,
+          tags: nextTags,
+        },
+      });
+      onDealUpdated?.();
+    } else {
+      setContactTagInput("");
+      setShowContactTagSuggestions(false);
+    }
+  };
+
+  const handleRemoveContactTag = async (indexToRemove: number) => {
+    const nextTags = contactTags.filter((_, i) => i !== indexToRemove);
+    setContactTags(nextTags);
+    await updateDealFullAction(deal.id, {
+      contact: {
+        id: deal.contactId,
+        tags: nextTags,
+      },
+    });
+    onDealUpdated?.();
+  };
 
   const currentPipeline = pipelines.find((p) => p.id === pipelineId) || pipelines[0];
   const currentStage = currentPipeline?.stages.find((s) => s.id === stageId) || currentPipeline?.stages[0];
@@ -341,6 +450,7 @@ export function DealDrawer({
       pipelineId,
       stageId,
       source,
+      tags: dealTags,
       assignedToId: isAdmin ? assignedToId : undefined,
       customFields: dealCustomFields,
       contact: {
@@ -349,6 +459,7 @@ export function DealDrawer({
         company: contactCompany || null,
         phone: contactPhone,
         email: contactEmail || null,
+        tags: contactTags,
         customFields: contactCustomFields,
       },
     });
@@ -620,14 +731,103 @@ export function DealDrawer({
               #{deal.id.slice(-8)}
             </span>
 
-            {/* +ТЕГИРОВАТЬ Button */}
-            <button
-              type="button"
-              className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-slate-200 bg-[#162838] hover:bg-[#1e3851] border border-[#223c56] px-2.5 py-1 rounded cursor-pointer transition-colors"
-            >
-              <Tag className="w-3 h-3" />
-              <span>+ТЕГИРОВАТЬ</span>
-            </button>
+            {/* Deal Tags display & add button */}
+            <div className="flex flex-wrap items-center gap-1.5 max-w-sm sm:max-w-md">
+              {dealTags.map((tag, tIdx) => (
+                <span
+                  key={tIdx}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#162838] hover:bg-[#1e3851] text-blue-300 border border-[#223c56] text-[11px] font-medium transition-colors shrink-0"
+                >
+                  <Tag className="w-2.5 h-2.5 text-blue-400 shrink-0" />
+                  <span className="truncate max-w-[120px]">{tag}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveDealTag(tIdx);
+                    }}
+                    className="text-slate-400 hover:text-rose-400 p-0.5 cursor-pointer"
+                    title="Удалить тег сделки"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingDealTag(!isAddingDealTag)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-300 hover:text-white bg-[#162838] hover:bg-[#1e3851] border border-[#223c56] hover:border-[#2e70e9] px-2.5 py-1 rounded cursor-pointer transition-colors shrink-0"
+                  title="Добавить тег сделки (например: рекламная кампания)"
+                >
+                  <Tag className="w-3 h-3 text-blue-400" />
+                  <span>{dealTags.length > 0 ? "+ Тег" : "+ТЕГИРОВАТЬ"}</span>
+                </button>
+
+                {isAddingDealTag && (
+                  <div className="absolute left-0 top-full mt-1.5 z-50 w-64 bg-[#0f1d2b] border border-[#2e70e9] rounded-xl shadow-2xl p-2.5 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-300">
+                      <span>Тегировать сделку</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsAddingDealTag(false)}
+                        className="text-slate-400 hover:text-white"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="РК Осень 2026..."
+                        value={newDealTagText}
+                        onChange={(e) => setNewDealTagText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddDealTag(newDealTagText);
+                          }
+                        }}
+                        className="flex-1 bg-[#162838] border border-[#223c56] text-white text-xs rounded px-2 py-1.5 focus:border-[#2e70e9] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAddDealTag(newDealTagText)}
+                        className="px-2.5 py-1.5 rounded bg-[#2e70e9] hover:bg-[#255ec4] text-white text-xs font-semibold cursor-pointer shrink-0"
+                      >
+                        OK
+                      </button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-400 font-medium">Подсказки тегов:</div>
+                      <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                        {knownDealTags
+                          .filter(
+                            (st) =>
+                              (!newDealTagText.trim() ||
+                                st.toLowerCase().includes(newDealTagText.toLowerCase().trim())) &&
+                              !dealTags.includes(st)
+                          )
+                          .map((st, sIdx) => (
+                            <button
+                              key={sIdx}
+                              type="button"
+                              onClick={() => handleAddDealTag(st)}
+                              className="px-2 py-0.5 rounded bg-[#162838] hover:bg-[#223c56] text-blue-200 text-[10px] border border-[#223c56] transition-colors cursor-pointer"
+                            >
+                              +{st}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Right Header Controls */}
@@ -922,15 +1122,11 @@ export function DealDrawer({
               {/* Настроить Tab / Button */}
               <button
                 type="button"
-                onClick={() => setLeftTab(leftTab === "settings" ? "general" : "settings")}
-                className={`text-xs font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors cursor-pointer ${
-                  leftTab === "settings"
-                    ? "bg-[#2e70e9] text-white shadow-xs"
-                    : "text-slate-400 hover:text-white hover:bg-[#162838]"
-                }`}
-                title="Настройка свойств полей и групп (amoCRM)"
+                onClick={() => setIsFieldSettingsOpen(true)}
+                className="text-xs font-semibold flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#162838] text-slate-300 hover:text-white hover:bg-[#1e3851] border border-[#223c56] hover:border-[#2e70e9] transition-colors cursor-pointer"
+                title="Настройка свойств полей, порядка и выпадающих списков"
               >
-                <Settings className="w-3.5 h-3.5" />
+                <Settings className="w-3.5 h-3.5 text-blue-400" />
                 <span>Настроить</span>
               </button>
             </div>
@@ -1402,218 +1598,197 @@ export function DealDrawer({
                       </div>
                     </div>
 
-                    {/* Тип маркетинга */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Тип маркетинга</span>
-                      <div className="col-span-7">
-                        <select
-                          value={(dealCustomFields["Тип маркетинга"] as string) || ""}
-                          onChange={(e) =>
-                            setDealCustomFields((prev) => ({
-                              ...prev,
-                              "Тип маркетинга": e.target.value,
-                            }))
-                          }
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                        >
-                          <option value="">...</option>
-                          <option value="Контекстная реклама">Контекстная реклама</option>
-                          <option value="Таргетированная реклама">Таргетированная реклама</option>
-                          <option value="Комплексный маркетинг">Комплексный маркетинг</option>
-                          <option value="SEO продвижение">SEO продвижение</option>
-                          <option value="Автообзвон">Автообзвон</option>
-                          <option value="Разработка сайтов">Разработка сайтов</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Дата запуска кампании */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Дата запуска</span>
-                      <div className="col-span-7">
-                        <input
-                          type="date"
-                          value={(dealCustomFields["Дата запуска кампании"] as string) || ""}
-                          onChange={(e) =>
-                            setDealCustomFields((prev) => ({
-                              ...prev,
-                              "Дата запуска кампании": e.target.value,
-                            }))
-                          }
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Бюджет кампании */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Бюджет кампании</span>
-                      <div className="col-span-7">
-                        <input
-                          type="number"
-                          placeholder="..."
-                          value={(dealCustomFields["Бюджет кампании"] as string) || ""}
-                          onChange={(e) =>
-                            setDealCustomFields((prev) => ({
-                              ...prev,
-                              "Бюджет кампании": e.target.value,
-                            }))
-                          }
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Тип клиента */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Тип клиента</span>
-                      <div className="col-span-7">
-                        <select
-                          value={(dealCustomFields["Тип клиента"] as string) || "Новый клиент"}
-                          onChange={(e) =>
-                            setDealCustomFields((prev) => ({
-                              ...prev,
-                              "Тип клиента": e.target.value,
-                            }))
-                          }
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                        >
-                          <option value="Новый клиент">Новый клиент</option>
-                          <option value="Повторный клиент">Повторный клиент</option>
-                          <option value="Партнер">Партнер</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Требуется согласование (Toggle) */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Требуется согл.</span>
-                      <div className="col-span-7 flex items-center">
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={!!dealCustomFields["Требуется согласование"]}
-                            onChange={(e) =>
-                              setDealCustomFields((prev) => ({
-                                ...prev,
-                                "Требуется согласование": e.target.checked,
-                              }))
-                            }
-                            className="sr-only peer"
-                          />
-                          <div className="w-9 h-5 bg-[#162838] border border-[#223c56] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#2e70e9]"></div>
-                          <span className="ml-2 text-xs text-slate-300">
-                            {dealCustomFields["Требуется согласование"] ? "Да" : "Нет"}
-                          </span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* Источник */}
-                    <div className="grid grid-cols-12 gap-2 items-center text-xs">
-                      <span className="col-span-5 text-slate-400 font-medium">Источник</span>
-                      <div className="col-span-7">
-                        <select
-                          value={source}
-                          onChange={(e) => setSource(e.target.value)}
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                        >
-                          <option value="">Не указан</option>
-                          {buildDealSourceOptions(
-                            source ? [...(sourceOptions || []), source] : sourceOptions
-                          ).map((opt) => (
-                            <option key={opt} value={opt}>
-                              {opt}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Комментарии менеджера */}
-                    <div className="grid grid-cols-12 gap-2 items-start text-xs pt-1">
-                      <span className="col-span-5 text-slate-400 font-medium pt-1">Комментарии</span>
-                      <div className="col-span-7">
-                        <textarea
-                          rows={2}
-                          placeholder="..."
-                          value={(dealCustomFields["Комментарии менеджера"] as string) || ""}
-                          onChange={(e) =>
-                            setDealCustomFields((prev) => ({
-                              ...prev,
-                              "Комментарии менеджера": e.target.value,
-                            }))
-                          }
-                          className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded p-2 focus:border-[#2e70e9] focus:outline-none resize-none"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Дополнительные кастомные поля сделки (из настроек полей) */}
+                    {/* Все настраиваемые поля сделки (динамический порядок и опции) */}
                     {customDealDefs
-                      .filter(
-                        (f) =>
-                          ![
-                            "Бюджет сделки",
-                            "Тип маркетинга",
-                            "Дата запуска кампании",
-                            "Бюджет кампании",
-                            "Тип клиента",
-                            "Требуется согласование",
-                            "Комментарии менеджера",
-                            "Источник",
-                          ].includes(f.name)
-                      )
-                      .map((def) => (
-                        <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
-                          <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
-                            {def.name}
-                          </span>
-                          <div className="col-span-7">
-                            {def.fieldType === "SELECT" ? (
-                              <select
-                                value={(dealCustomFields[def.name] as string) || ""}
-                                onChange={(e) =>
-                                  setDealCustomFields((prev) => ({
-                                    ...prev,
-                                    [def.name]: e.target.value,
-                                  }))
-                                }
-                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                              >
-                                <option value="">...</option>
-                                {(def.options || []).map((opt) => (
-                                  <option key={opt} value={opt}>
-                                    {opt}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : def.fieldType === "DATE" ? (
-                              <input
-                                type="date"
-                                value={(dealCustomFields[def.name] as string) || ""}
-                                onChange={(e) =>
-                                  setDealCustomFields((prev) => ({
-                                    ...prev,
-                                    [def.name]: e.target.value,
-                                  }))
-                                }
-                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
-                              />
-                            ) : def.fieldType === "NUMBER" ? (
-                              <input
-                                type="number"
-                                placeholder="..."
-                                value={(dealCustomFields[def.name] as string) || ""}
-                                onChange={(e) =>
-                                  setDealCustomFields((prev) => ({
-                                    ...prev,
-                                    [def.name]: e.target.value,
-                                  }))
-                                }
-                                className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
-                              />
-                            ) : (
+                      .filter((f) => f.name.toLowerCase() !== "бюджет сделки")
+                      .map((def) => {
+                        const nameLower = def.name.toLowerCase();
+
+                        // Специальный рендеринг для поля «Источник»
+                        if (nameLower === "источник") {
+                          const opts = buildDealSourceOptions(
+                            def.options && def.options.length > 0 ? def.options : sourceOptions
+                          );
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                              <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7">
+                                <select
+                                  value={source || (dealCustomFields[def.name] as string) || ""}
+                                  onChange={(e) => {
+                                    setSource(e.target.value);
+                                    setDealCustomFields((prev) => ({ ...prev, [def.name]: e.target.value }));
+                                  }}
+                                  className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
+                                >
+                                  <option value="">Не указан</option>
+                                  {opts.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Чекбокс / переключатель для «Требуется согласование»
+                        if (
+                          nameLower === "требуется согласование" ||
+                          (def.fieldType === "SELECT" &&
+                            def.options?.length === 2 &&
+                            def.options.includes("Да") &&
+                            def.options.includes("Нет"))
+                        ) {
+                          const isChecked =
+                            dealCustomFields[def.name] === "Да" || dealCustomFields[def.name] === true;
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                              <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7 flex items-center">
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={(e) =>
+                                      setDealCustomFields((prev) => ({
+                                        ...prev,
+                                        [def.name]: e.target.checked ? "Да" : "Нет",
+                                      }))
+                                    }
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-9 h-5 bg-[#162838] border border-[#223c56] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#2e70e9]"></div>
+                                  <span className="ml-2 text-xs text-slate-300">
+                                    {isChecked ? "Да" : "Нет"}
+                                  </span>
+                                </label>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Выпадающий список (SELECT) — включая «Тип клиента», «Тип маркетинга» и др.
+                        if (def.fieldType === "SELECT") {
+                          const val = (dealCustomFields[def.name] as string) || "";
+                          const options = def.options || [];
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                              <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7">
+                                <select
+                                  value={val}
+                                  onChange={(e) =>
+                                    setDealCustomFields((prev) => ({
+                                      ...prev,
+                                      [def.name]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
+                                >
+                                  <option value="">...</option>
+                                  {options.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                  {val && !options.includes(val) && (
+                                    <option value={val}>{val}</option>
+                                  )}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Календарь (DATE)
+                        if (def.fieldType === "DATE") {
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                              <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7">
+                                <input
+                                  type="date"
+                                  value={(dealCustomFields[def.name] as string) || ""}
+                                  onChange={(e) =>
+                                    setDealCustomFields((prev) => ({
+                                      ...prev,
+                                      [def.name]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none cursor-pointer"
+                                />
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Числовое поле (NUMBER)
+                        if (def.fieldType === "NUMBER") {
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                              <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7">
+                                <input
+                                  type="number"
+                                  placeholder="..."
+                                  value={(dealCustomFields[def.name] as string) || ""}
+                                  onChange={(e) =>
+                                    setDealCustomFields((prev) => ({
+                                      ...prev,
+                                      [def.name]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Текстовое поле (TEXT)
+                        const isTextarea = nameLower.includes("комментари") || nameLower.includes("описание");
+                        if (isTextarea) {
+                          return (
+                            <div key={def.id} className="grid grid-cols-12 gap-2 items-start text-xs pt-1">
+                              <span className="col-span-5 text-slate-400 font-medium pt-1 truncate" title={def.name}>
+                                {def.name}
+                              </span>
+                              <div className="col-span-7">
+                                <textarea
+                                  rows={2}
+                                  placeholder="..."
+                                  value={(dealCustomFields[def.name] as string) || ""}
+                                  onChange={(e) =>
+                                    setDealCustomFields((prev) => ({
+                                      ...prev,
+                                      [def.name]: e.target.value,
+                                    }))
+                                  }
+                                  className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded p-2 focus:border-[#2e70e9] focus:outline-none resize-none"
+                                />
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div key={def.id} className="grid grid-cols-12 gap-2 items-center text-xs">
+                            <span className="col-span-5 text-slate-400 font-medium truncate" title={def.name}>
+                              {def.name}
+                            </span>
+                            <div className="col-span-7">
                               <input
                                 type="text"
                                 placeholder="..."
@@ -1626,16 +1801,16 @@ export function DealDrawer({
                                 }
                                 className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-[#2e70e9] focus:outline-none"
                               />
-                            )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
 
                     {/* Quick switch to field settings */}
                     <div className="pt-1">
                       <button
                         type="button"
-                        onClick={() => setLeftTab("settings")}
+                        onClick={() => setIsFieldSettingsOpen(true)}
                         className="text-xs text-[#2e70e9] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5" />
@@ -1758,6 +1933,133 @@ export function DealDrawer({
                       </div>
                     </div>
 
+                    {/* Теги контакта (Contact Tags) */}
+                    <div className="grid grid-cols-12 gap-2 items-start text-xs pt-1">
+                      <span className="col-span-5 text-slate-400 font-medium pt-1.5 flex items-center gap-1.5">
+                        <Tag className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Теги контакта</span>
+                      </span>
+
+                      <div className="col-span-7 space-y-2">
+                        {/* Selected Contact Tags Pills */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {contactTags.length === 0 ? (
+                            <span className="text-[11px] text-slate-500 italic py-0.5">
+                              Нет тегов у контакта
+                            </span>
+                          ) : (
+                            contactTags.map((tag, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-950/70 border border-emerald-700/60 text-emerald-300 text-xs font-semibold shadow-xs"
+                              >
+                                <span>#{tag}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveContactTag(idx)}
+                                  className="text-emerald-400 hover:text-rose-400 p-0.5 transition-colors cursor-pointer"
+                                  title="Удалить тег"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+
+                        {/* Input with Autocomplete Dropdown */}
+                        <div className="relative">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={contactTagInput}
+                              onChange={(e) => {
+                                setContactTagInput(e.target.value);
+                                setShowContactTagSuggestions(true);
+                              }}
+                              onFocus={() => setShowContactTagSuggestions(true)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleAddContactTag(contactTagInput);
+                                }
+                              }}
+                              placeholder="Введите тег (например: Не квалифицированный)..."
+                              className="w-full bg-[#162838] border border-[#223c56] text-slate-200 text-xs rounded px-2.5 py-1.5 focus:border-emerald-500 focus:outline-none"
+                            />
+                            {contactTagInput.trim() && (
+                              <button
+                                type="button"
+                                onClick={() => handleAddContactTag(contactTagInput)}
+                                className="px-2.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0 cursor-pointer"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Autocomplete Dropdown */}
+                          {showContactTagSuggestions &&
+                            contactTagInput.trim().length > 0 &&
+                            knownContactTags.filter(
+                              (sug) =>
+                                sug.toLowerCase().includes(contactTagInput.toLowerCase().trim()) &&
+                                !contactTags.includes(sug)
+                            ).length > 0 && (
+                              <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-[#0f1d2b] border border-[#223c56] rounded-xl shadow-xl p-1.5 max-h-40 overflow-y-auto">
+                                <div className="text-[10px] font-bold text-slate-400 px-2 py-1 uppercase">
+                                  Подходящие теги
+                                </div>
+                                {knownContactTags
+                                  .filter(
+                                    (sug) =>
+                                      sug.toLowerCase().includes(contactTagInput.toLowerCase().trim()) &&
+                                      !contactTags.includes(sug)
+                                  )
+                                  .map((sug, sIdx) => (
+                                    <button
+                                      key={sIdx}
+                                      type="button"
+                                      onClick={() => {
+                                        handleAddContactTag(sug);
+                                        setShowContactTagSuggestions(false);
+                                      }}
+                                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-slate-200 hover:bg-[#1a334d] hover:text-emerald-300 flex items-center justify-between transition-colors cursor-pointer"
+                                    >
+                                      <span>{sug}</span>
+                                      <Plus className="w-3 h-3 text-emerald-400" />
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                        </div>
+
+                        {/* 3 Quick Tag Buttons for 1-Click Assignment */}
+                        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                          <span className="text-[10px] text-slate-500 font-medium">Быстрый тег:</span>
+                          {quickContactTags.slice(0, 3).map((qTag, qIdx) => {
+                            const isAssigned = contactTags.includes(qTag);
+                            return (
+                              <button
+                                key={qIdx}
+                                type="button"
+                                disabled={isAssigned}
+                                onClick={() => handleAddContactTag(qTag)}
+                                className={`text-[11px] px-2 py-0.5 rounded border transition-colors cursor-pointer flex items-center gap-1 ${
+                                  isAssigned
+                                    ? "bg-[#11202f] text-slate-600 border-[#1a2d3f] cursor-default"
+                                    : "bg-[#14283c] hover:bg-[#1c3954] text-emerald-300 border-emerald-800/60"
+                                }`}
+                                title={isAssigned ? "Уже добавлен" : `Добавить тег «${qTag}»`}
+                              >
+                                <span>+{qTag}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Дополнительные кастомные поля контакта */}
                     {customContactDefs
                       .filter((f) => !["Должность", "Имя контакта", "Телефон", "Email"].includes(f.name))
@@ -1832,7 +2134,7 @@ export function DealDrawer({
                     <div className="pt-1">
                       <button
                         type="button"
-                        onClick={() => setLeftTab("settings")}
+                        onClick={() => setIsFieldSettingsOpen(true)}
                         className="text-xs text-[#2e70e9] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5" />

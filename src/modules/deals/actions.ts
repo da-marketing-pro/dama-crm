@@ -552,7 +552,7 @@ const DEFAULT_DEAL_FIELDS = [
   {
     name: "Тип клиента",
     fieldType: FieldType.SELECT,
-    options: ["Новый клиент", "Повторный клиент", "Партнер"],
+    options: ["Лид", "Новый клиент", "Повторный клиент", "Партнер"],
   },
   {
     name: "Требуется согласование",
@@ -569,10 +569,9 @@ const DEFAULT_DEAL_FIELDS = [
     fieldType: FieldType.SELECT,
     options: [
       "Автообзвон",
-      "WhatsApp",
       "Таргет (KZ)",
       "Таргет (Инт)",
-      "Рекомендация",
+      "Сарафан",
       "Сайт",
       "Не указан",
     ],
@@ -583,11 +582,12 @@ export async function getDealFieldDefinitionsAction() {
   try {
     let dealFields = await prisma.customFieldDefinition.findMany({
       where: { entityType: "DEAL" },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     });
 
     if (dealFields.length === 0) {
-      for (const df of DEFAULT_DEAL_FIELDS) {
+      for (let i = 0; i < DEFAULT_DEAL_FIELDS.length; i++) {
+        const df = DEFAULT_DEAL_FIELDS[i];
         await prisma.customFieldDefinition.create({
           data: {
             entityType: "DEAL",
@@ -595,13 +595,33 @@ export async function getDealFieldDefinitionsAction() {
             fieldType: df.fieldType,
             options: JSON.stringify(df.options),
             isRequired: false,
+            order: i,
           },
         });
       }
       dealFields = await prisma.customFieldDefinition.findMany({
         where: { entityType: "DEAL" },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
       });
+    }
+
+    // Автоматически гарантируем наличие категории «Лид» в поле «Тип клиента»
+    const clientTypeField = dealFields.find((f) => f.name.toLowerCase() === "тип клиента");
+    if (clientTypeField) {
+      let currentOpts: string[] = [];
+      try {
+        currentOpts = typeof clientTypeField.options === "string" ? JSON.parse(clientTypeField.options) : (clientTypeField.options as string[]) || [];
+      } catch {
+        currentOpts = [];
+      }
+      if (!currentOpts.includes("Лид")) {
+        const updatedOpts = ["Лид", ...currentOpts.filter((o) => o !== "Лид")];
+        await prisma.customFieldDefinition.update({
+          where: { id: clientTypeField.id },
+          data: { options: JSON.stringify(updatedOpts) },
+        });
+        clientTypeField.options = JSON.stringify(updatedOpts);
+      }
     }
 
     // Проверяем наличие поля «Должность» у контактов
@@ -616,13 +636,14 @@ export async function getDealFieldDefinitionsAction() {
           fieldType: FieldType.TEXT,
           options: "[]",
           isRequired: false,
+          order: 0,
         },
       });
     }
 
     const contactFields = await prisma.customFieldDefinition.findMany({
       where: { entityType: "CONTACT" },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     });
 
     const parsedDeal = dealFields.map((f) => {
@@ -639,6 +660,7 @@ export async function getDealFieldDefinitionsAction() {
         fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
         options: Array.isArray(opts) ? opts : [],
         isRequired: f.isRequired,
+        order: f.order,
       };
     });
 
@@ -656,6 +678,7 @@ export async function getDealFieldDefinitionsAction() {
         fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
         options: Array.isArray(opts) ? opts : [],
         isRequired: f.isRequired,
+        order: f.order,
       };
     });
 
@@ -690,6 +713,14 @@ export async function createDealFieldDefinitionAction(data: {
       return { success: false, error: "Укажите название поля" };
     }
 
+    // Находим максимальный порядок
+    const maxOrderField = await prisma.customFieldDefinition.findFirst({
+      where: { entityType: data.entityType || "DEAL" },
+      orderBy: { order: "desc" },
+      select: { order: true },
+    });
+    const nextOrder = (maxOrderField?.order ?? -1) + 1;
+
     const field = await prisma.customFieldDefinition.create({
       data: {
         entityType: data.entityType || "DEAL",
@@ -697,6 +728,7 @@ export async function createDealFieldDefinitionAction(data: {
         fieldType: data.fieldType,
         options: data.options ? JSON.stringify(data.options) : "[]",
         isRequired: !!data.isRequired,
+        order: nextOrder,
       },
     });
 
@@ -705,6 +737,153 @@ export async function createDealFieldDefinitionAction(data: {
     return { success: true, fieldId: field.id };
   } catch (err: unknown) {
     return { success: false, error: err instanceof Error ? err.message : "Ошибка создания поля" };
+  }
+}
+
+export async function updateDealFieldDefinitionAction(
+  fieldId: string,
+  data: {
+    name?: string;
+    fieldType?: "TEXT" | "NUMBER" | "DATE" | "SELECT";
+    options?: string[];
+    isRequired?: boolean;
+    order?: number;
+  }
+) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== Role.ADMIN) {
+      return { success: false, error: "Доступ запрещен: редактировать поля может только Администратор" };
+    }
+
+    const existing = await prisma.customFieldDefinition.findUnique({
+      where: { id: fieldId },
+    });
+    if (!existing) {
+      return { success: false, error: "Поле не найдено" };
+    }
+
+    const updateData: Record<string, unknown> = {};
+    if (data.name && data.name.trim()) updateData.name = data.name.trim();
+    if (data.fieldType) updateData.fieldType = data.fieldType;
+    if (data.options !== undefined) updateData.options = JSON.stringify(data.options);
+    if (data.isRequired !== undefined) updateData.isRequired = !!data.isRequired;
+    if (data.order !== undefined) updateData.order = data.order;
+
+    await prisma.customFieldDefinition.update({
+      where: { id: fieldId },
+      data: updateData,
+    });
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    revalidatePath("/");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка обновления поля" };
+  }
+}
+
+export async function reorderDealFieldDefinitionsAction(orderedIds: string[]) {
+  try {
+    const user = await getAuthUser();
+    if (user.role !== Role.ADMIN) {
+      return { success: false, error: "Доступ запрещен: изменять порядок полей может только Администратор" };
+    }
+
+    for (let i = 0; i < orderedIds.length; i++) {
+      await prisma.customFieldDefinition.update({
+        where: { id: orderedIds[i] },
+        data: { order: i },
+      });
+    }
+
+    revalidatePath("/deals");
+    revalidatePath("/contacts");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : "Ошибка изменения порядка полей" };
+  }
+}
+
+export async function getDistinctTagsAction() {
+  try {
+    const [deals, contacts] = await Promise.all([
+      prisma.deal.findMany({
+        select: { tags: true, customFields: true },
+        orderBy: { updatedAt: "desc" },
+        take: 200,
+      }),
+      prisma.contact.findMany({
+        select: { tags: true, customFields: true },
+        orderBy: { updatedAt: "desc" },
+        take: 200,
+      }),
+    ]);
+
+    const dealTagsSet = new Set<string>();
+    const dealRecent: string[] = [];
+    const defaultDeal = ["Рекламная кампания", "Автообзвон", "Таргет", "VIP", "Партнер"];
+    for (const d of defaultDeal) {
+      dealTagsSet.add(d);
+      dealRecent.push(d);
+    }
+
+    for (const d of deals) {
+      const tList: string[] =
+        Array.isArray(d.tags) && d.tags.length > 0
+          ? d.tags
+          : Array.isArray((d.customFields as any)?.tags)
+          ? (d.customFields as any).tags
+          : [];
+      for (const t of tList) {
+        const str = String(t || "").trim();
+        if (str) {
+          dealTagsSet.add(str);
+          if (!dealRecent.includes(str)) dealRecent.unshift(str);
+        }
+      }
+    }
+
+    const contactTagsSet = new Set<string>();
+    const contactRecent: string[] = [];
+    const defaultContact = ["Не квалифицированный", "Лид", "Партнер", "В работе", "СПАМ", "Постоянный"];
+    for (const c of defaultContact) {
+      contactTagsSet.add(c);
+      contactRecent.push(c);
+    }
+
+    for (const c of contacts) {
+      const tList: string[] =
+        Array.isArray(c.tags) && c.tags.length > 0
+          ? c.tags
+          : Array.isArray((c.customFields as any)?.tags)
+          ? (c.customFields as any).tags
+          : [];
+      for (const t of tList) {
+        const str = String(t || "").trim();
+        if (str) {
+          contactTagsSet.add(str);
+          if (!contactRecent.includes(str)) contactRecent.unshift(str);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      dealTags: Array.from(dealTagsSet),
+      recentDealTags: Array.from(new Set(dealRecent)).slice(0, 3),
+      contactTags: Array.from(contactTagsSet),
+      recentContactTags: Array.from(new Set(contactRecent)).slice(0, 3),
+    };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      dealTags: ["Рекламная кампания", "Автообзвон", "VIP"],
+      recentDealTags: ["Рекламная кампания", "Автообзвон", "VIP"],
+      contactTags: ["Не квалифицированный", "Лид", "Партнер"],
+      recentContactTags: ["Не квалифицированный", "Лид", "Партнер"],
+    };
   }
 }
 
@@ -738,6 +917,7 @@ export async function updateDealFullAction(
     stageId?: string;
     assignedToId?: string;
     source?: string;
+    tags?: string[];
     customFields?: Record<string, unknown>;
     contact?: {
       id: string;
@@ -745,6 +925,7 @@ export async function updateDealFullAction(
       company?: string | null;
       phone?: string;
       email?: string | null;
+      tags?: string[];
       customFields?: Record<string, unknown>;
     };
   }
@@ -794,6 +975,17 @@ export async function updateDealFullAction(
 
     if (data.source !== undefined) {
       prevCustom.source = data.source.trim();
+    }
+
+    if (data.tags !== undefined) {
+      const cleanTags = data.tags.map((t) => String(t || "").trim()).filter(Boolean);
+      dealUpdate.tags = cleanTags;
+      prevCustom.tags = cleanTags;
+      const oldTags = Array.isArray(deal.tags) ? deal.tags.join(", ") : "";
+      const newTags = cleanTags.join(", ");
+      if (oldTags !== newTags) {
+        auditLogs.push(`Теги сделки: «${newTags || "нет"}»`);
+      }
     }
 
     if (data.customFields) {
@@ -854,11 +1046,29 @@ export async function updateDealFullAction(
         contactUpdate.email = data.contact.email ? data.contact.email.trim() : null;
         auditLogs.push(`Email изменен на «${contactUpdate.email || "—"}»`);
       }
-      if (data.contact.customFields) {
+      if (data.contact.tags !== undefined) {
+        const cleanTags = data.contact.tags.map((t) => String(t || "").trim()).filter(Boolean);
+        contactUpdate.tags = cleanTags;
         const prevContactCustom =
           deal.contact.customFields && typeof deal.contact.customFields === "object" && !Array.isArray(deal.contact.customFields)
             ? { ...(deal.contact.customFields as Record<string, unknown>) }
             : {};
+        prevContactCustom.tags = cleanTags;
+        contactUpdate.customFields = prevContactCustom;
+
+        const oldContactTags = Array.isArray(deal.contact.tags) ? deal.contact.tags.join(", ") : "";
+        const newContactTags = cleanTags.join(", ");
+        if (oldContactTags !== newContactTags) {
+          auditLogs.push(`Теги контакта: «${newContactTags || "нет"}»`);
+        }
+      }
+
+      if (data.contact.customFields) {
+        const prevContactCustom =
+          (contactUpdate.customFields as Record<string, unknown>) ||
+          (deal.contact.customFields && typeof deal.contact.customFields === "object" && !Array.isArray(deal.contact.customFields)
+            ? { ...(deal.contact.customFields as Record<string, unknown>) }
+            : {});
         for (const [k, v] of Object.entries(data.contact.customFields)) {
           if (prevContactCustom[k] !== v) {
             auditLogs.push(`Для контакта поле «${k}»: «${v || "—"}»`);

@@ -63,6 +63,7 @@ export default async function DealsPage({
                     phone: true,
                     company: true,
                     email: true,
+                    tags: true,
                     customFields: true,
                     notes: {
                       select: {
@@ -152,7 +153,7 @@ export default async function DealsPage({
     }),
     prisma.currencySetting.findFirst(),
     prisma.customFieldDefinition.findMany({
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     }),
   ]);
 
@@ -171,33 +172,51 @@ export default async function DealsPage({
     fieldType: f.fieldType as "TEXT" | "NUMBER" | "DATE" | "SELECT",
     options: parseFieldOptions(f.options),
     isRequired: f.isRequired,
+    order: f.order,
   }));
 
   const pipelines: PipelineWithStages[] = rawPipelines.map((pipeline) => ({
     ...pipeline,
     stages: pipeline.stages.map((stage) => ({
       ...stage,
-      deals: stage.deals.map((deal) => ({
-        ...deal,
-        source: resolveDealSource(deal),
-        customFields:
-          (deal.customFields as Record<string, unknown> | null) || {},
-        contact: {
-          id: deal.contact.id,
-          name: deal.contact.name,
-          phone: deal.contact.phone,
-          company: deal.contact.company,
-          email: deal.contact.email,
+      deals: stage.deals.map((deal) => {
+        const dealTags =
+          deal.tags && deal.tags.length > 0
+            ? deal.tags
+            : Array.isArray((deal.customFields as any)?.tags)
+            ? (deal.customFields as any).tags
+            : [];
+        const contactTags =
+          deal.contact.tags && deal.contact.tags.length > 0
+            ? deal.contact.tags
+            : Array.isArray((deal.contact.customFields as any)?.tags)
+            ? (deal.contact.customFields as any).tags
+            : [];
+
+        return {
+          ...deal,
+          tags: dealTags,
+          source: resolveDealSource(deal),
           customFields:
-            (deal.contact.customFields as Record<string, unknown> | null) || {},
-          notes: (deal.contact.notes || []).map((n) => ({
-            id: n.id,
-            content: n.content,
-            createdAt: n.createdAt.toISOString(),
-            author: n.author,
-          })),
-        },
-      })),
+            (deal.customFields as Record<string, unknown> | null) || {},
+          contact: {
+            id: deal.contact.id,
+            name: deal.contact.name,
+            phone: deal.contact.phone,
+            company: deal.contact.company,
+            email: deal.contact.email,
+            tags: contactTags,
+            customFields:
+              (deal.contact.customFields as Record<string, unknown> | null) || {},
+            notes: (deal.contact.notes || []).map((n) => ({
+              id: n.id,
+              content: n.content,
+              createdAt: n.createdAt.toISOString(),
+              author: n.author,
+            })),
+          },
+        };
+      }),
     })),
   }));
 
