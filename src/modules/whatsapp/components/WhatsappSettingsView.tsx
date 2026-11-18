@@ -880,34 +880,78 @@ export function WhatsappSettingsView({
                   </span>
                 </div>
 
-                {/* Важное предупреждение Callo */}
-                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 space-y-1">
-                  <p className="font-semibold text-amber-950">
-                    ⚠️ Требование документации Callo (Постбэки):
+                {/* Инструкция Callo: 2 способа интеграции */}
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-[11px] text-blue-950 space-y-1.5">
+                  <p className="font-semibold text-blue-950 flex items-center gap-1.5">
+                    <span>💡 Как подключить отклики из Callo.com в CRM:</span>
                   </p>
                   <p className="leading-relaxed">
-                    Callo требует указывать в URL параметры с префиксом <code>ct_*</code>. Если указать голый адрес без параметров, Callo отправляет пустой запрос без номера телефона!
+                    В Callo есть 2 способа отправки данных в CRM. Вы можете использовать любой из них (или оба сразу — дубли защищены):
                   </p>
                 </div>
 
-                {/* Рекомендуемый URL для Callo с параметрами */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-slate-700">
-                    Рекомендуемый URL (скопируйте и вставьте в Callo):
-                  </label>
+                {/* Вариант 1: IVR-действие «Вебхук во время звонка» */}
+                <div className="space-y-1.5 p-3 rounded-xl bg-orange-50/60 border border-orange-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-[11px] font-bold text-orange-950">
+                      Вариант 1: Для IVR «Вебхук во время звонка» (по нажатию кнопки / согласию)
+                    </label>
+                    <span className="text-[10px] text-orange-800 font-semibold bg-orange-100 px-2 py-0.5 rounded-full">
+                      Рекомендуется
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-orange-900 leading-relaxed">
+                    Вставьте этот URL в сценарий IVR (действие «Вебхук во время звонка»). Робот Callo автоматически подставит реальный номер клиента вместо <code>&#123;ct_phone&#125;</code>:
+                  </p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 truncate select-all">
-                      {`${calloWebhookUrl}?ct_phone&ct_call_id&ct_campaign_id&ct_button_num&ct_status`}
+                      {`${calloWebhookUrl}?ct_phone={ct_phone}&phone={phone}&ct_call_id={ct_call_id}&ct_campaign_id={ct_campaign_id}&ct_button_num={ct_button_num}&ct_status={ct_status}`}
                     </code>
                     <button
                       type="button"
                       onClick={() => {
-                        const readyUrl = `${calloWebhookUrl}?ct_phone&ct_call_id&ct_campaign_id&ct_button_num&ct_status`;
+                        const readyUrl = `${calloWebhookUrl}?ct_phone={ct_phone}&phone={phone}&ct_call_id={ct_call_id}&ct_campaign_id={ct_campaign_id}&ct_button_num={ct_button_num}&ct_status={ct_status}`;
                         navigator.clipboard.writeText(readyUrl);
+                        setCopiedCalloWebhook(true);
+                        setTimeout(() => setCopiedCalloWebhook(false), 2000);
+                      }}
+                      className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      {copiedCalloWebhook ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-white" />
+                          <span>Скопировано!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Копировать</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Вариант 2: Постбэк кампании (чистый URL) */}
+                <div className="space-y-1.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                  <label className="text-[11px] font-bold text-slate-900">
+                    Вариант 2: Для поля «Постбэк» в основных настройках кампании
+                  </label>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    В поле «Постбэки» самой кампании вставляется чистый базовый URL без параметров — Callo сам автоматически дописывает номер и результат звонка:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-mono text-slate-800 truncate select-all">
+                      {calloWebhookUrl}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(calloWebhookUrl);
                         setCopiedCalloPostback(true);
                         setTimeout(() => setCopiedCalloPostback(false), 2000);
                       }}
-                      className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                     >
                       {copiedCalloPostback ? (
                         <>
@@ -926,26 +970,22 @@ export function WhatsappSettingsView({
 
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed space-y-1">
                   <div className="font-bold text-amber-950 flex items-center gap-1.5">
-                    <span>⚠️ Важное правило для Callo.com:</span>
+                    <span>⚠️ Почему в Callo нужны макросы &#123;ct_phone&#125;:</span>
                   </div>
                   <p>
-                    В Callo в поле URL обязательно вставляйте оранжевую ссылку выше <strong>вместе с <code>?ct_phone&ct_call_id...</code></strong>. 
-                    Если вставить ссылку без параметров, робот Callo отправляет пустой POST-запрос без номера абонента, и CRM не может создать лид.
+                    В IVR-действии «Вебхук во время звонка» Callo обращается ровно по той ссылке, которая указана в поле. Если в ссылке написать просто <code>?ct_phone</code> без фигурных скобок <code>=&#123;ct_phone&#125;</code>, Callo отправляет пустой запрос без номера абонента. Обязательно скопируйте обновленный URL выше (Вариант 1) и вставьте его в настройки сценария Callo!
                   </p>
                 </div>
 
                 <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed pt-1 border-t border-slate-200">
                   <li>
-                    В Callo откройте кампанию ➔ <strong>Сценарии IVR</strong> (нажатие цифры 1 или распознавание слов) ➔ выберите реакцию <strong>«Webhook»</strong> или укажите в поле <strong>«Постбэки»</strong>.
+                    В Callo откройте кампанию ➔ <strong>Сценарии IVR</strong> (нажатие цифры 1 или распознавание ответа) ➔ выберите действие <strong>«Вебхук во время звонка»</strong>.
                   </li>
                   <li>
-                    Вставьте оранжевую ссылку выше. Callo автоматически подставит в неё номер откликнувшегося абонента (<code>ct_phone</code>).
+                    Вставьте ссылку из <strong>Варианта 1</strong>. Метод запроса: <strong>POST</strong> или <strong>GET</strong>.
                   </li>
                   <li>
-                    Метод запроса в Callo: подходит как <strong>POST</strong>, так и <strong>GET</strong>.
-                  </li>
-                  <li>
-                    Рекомендуем отметить в Callo <strong>«Отправлять сразу, не дожидаясь окончания звонка»</strong>.
+                    Рекомендуем также указать ссылку из <strong>Варианта 2</strong> в поле <strong>«Постбэки»</strong> в настройках кампании.
                   </li>
                 </ul>
               </div>

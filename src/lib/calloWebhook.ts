@@ -69,10 +69,25 @@ function safeRevalidate(path: string) {
   }
 }
 
+
+function isUnresolvedTemplatePlaceholder(val?: string | null): boolean {
+  if (!val) return true;
+  const trimmed = val.trim();
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("%") ||
+    trimmed.startsWith("[") ||
+    trimmed.includes("ct_phone") ||
+    trimmed.includes("ct_call_id") ||
+    trimmed === "undefined" ||
+    trimmed === "null"
+  );
+}
+
 function pickParam(params: Record<string, string>, keys: string[]): string {
   for (const key of keys) {
     const val = params[key];
-    if (typeof val === "string" && val.trim()) {
+    if (typeof val === "string" && val.trim() && !isUnresolvedTemplatePlaceholder(val)) {
       return val.trim();
     }
   }
@@ -135,19 +150,6 @@ function flattenJsonIntoParams(
   }
 }
 
-function isUnresolvedTemplatePlaceholder(val?: string | null): boolean {
-  if (!val) return true;
-  const trimmed = val.trim();
-  return (
-    trimmed.startsWith("{") ||
-    trimmed.startsWith("%") ||
-    trimmed.startsWith("[") ||
-    trimmed.includes("ct_phone") ||
-    trimmed.includes("ct_call_id") ||
-    trimmed === "undefined" ||
-    trimmed === "null"
-  );
-}
 
 function normalizeCalloPhoneInput(params: Record<string, string>): string {
   // 1. Прямые ключи номера клиента (включая ct_*, dst, callee, subscriber и т.д.)
@@ -365,7 +367,7 @@ export async function processCalloLeadWebhook(
       outcome: options?.isTest ? "error" : "ignored",
       note: options?.isTest
         ? "Не передан корректный номер телефона (ct_phone)"
-        : "Входящий запрос без распознанного номера (вставьте URL с ?ct_phone в Callo)",
+        : "Входящий запрос от Callo получен (200 OK), но номер абонента пустой. В Callo в URL используйте макросы (?ct_phone={ct_phone}&phone={phone}) или укажите чистый Postback URL без знака вопроса",
       rawSummary: effectiveSummary,
       headersSummary: options?.headersSummary,
     });
