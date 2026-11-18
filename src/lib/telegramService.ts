@@ -120,17 +120,63 @@ export async function setupTelegramBotWebhook(botToken: string): Promise<{ succe
 }
 
 export function getLocalTodayInfo(targetDate: Date = new Date()) {
-  const utc = targetDate.getTime() + targetDate.getTimezoneOffset() * 60000;
-  const tzOffsetHours = 5; // UTC+5 Казахстан
-  const localDate = new Date(utc + 3600000 * tzOffsetHours);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Almaty",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(targetDate);
+  const p = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const dateStr = `${p.year}-${p.month}-${p.day}`;
+  const dayOfWeek = new Date(`${dateStr}T12:00:00+05:00`).getDay();
+  const hours = parseInt(p.hour || "0", 10);
+  const minutes = parseInt(p.minute || "0", 10);
+  const monthIndex = parseInt(p.month || "1", 10) - 1;
+  const dayNum = parseInt(p.day || "1", 10);
+  const yearNum = parseInt(p.year || "2026", 10);
 
-  const year = localDate.getFullYear();
-  const month = String(localDate.getMonth() + 1).padStart(2, "0");
-  const day = String(localDate.getDate()).padStart(2, "0");
-  const dateStr = `${year}-${month}-${day}`;
-  const dayOfWeek = localDate.getDay();
+  // localDate в часовом поясе Алматы (UTC+5)
+  const localDate = new Date(`${dateStr}T${p.hour}:${p.minute}:${p.second}+05:00`);
 
-  return { localDate, dateStr, dayOfWeek };
+  return { localDate, dateStr, dayOfWeek, hours, minutes, monthIndex, dayNum, yearNum };
+}
+
+/**
+ * Форматирует время задачи строго в часовом поясе Казахстан / Алматы (UTC+5).
+ * Исключает расхождение между серверным UTC временем и пользовательским временем.
+ */
+export function formatKazakhstanTaskTime(dueDate: Date | string): {
+  timeStr: string;
+  hasTime: boolean;
+  hours: string;
+  minutes: string;
+} {
+  const d = new Date(dueDate);
+  if (isNaN(d.getTime())) {
+    return { timeStr: "В течение дня", hasTime: false, hours: "00", minutes: "00" };
+  }
+
+  const formatter = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Asia/Almaty",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const timeFormatted = formatter.format(d);
+  const [hours, minutes] = timeFormatted.split(":");
+  const hasTime = !(hours === "00" && minutes === "00");
+
+  return {
+    timeStr: hasTime ? timeFormatted : "В течение дня",
+    hasTime,
+    hours: hours || "00",
+    minutes: minutes || "00",
+  };
 }
 
 export async function sendDailyTasksDigest(options: { force?: boolean } = {}): Promise<{
@@ -146,7 +192,7 @@ export async function sendDailyTasksDigest(options: { force?: boolean } = {}): P
       return { success: false, skipped: "DISABLED_OR_NOT_CONFIGURED" };
     }
 
-    const { localDate, dateStr, dayOfWeek } = getLocalTodayInfo();
+    const { dateStr, dayOfWeek, monthIndex, dayNum, yearNum } = getLocalTodayInfo();
 
     // Воскресенье (0) — день отдыха, сводка не отправляется (если не форсировано)
     if (dayOfWeek === 0 && !options.force) {
@@ -158,12 +204,8 @@ export async function sendDailyTasksDigest(options: { force?: boolean } = {}): P
       return { success: true, skipped: "ALREADY_SENT_TODAY" };
     }
 
-    // Вычисляем границы сегодняшнего дня в UTC+5
-    const startOfDay = new Date(localDate);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(localDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    // Вычисляем границы сегодняшнего дня в часовом поясе Алматы (UTC+5)
+    const endOfDay = new Date(`${dateStr}T23:59:59.999+05:00`);
 
     // Запрашиваем активные невыполненные задачи на сегодня (включая просроченные)
     const tasks = await prisma.task.findMany({
@@ -196,18 +238,13 @@ export async function sendDailyTasksDigest(options: { force?: boolean } = {}): P
       };
     } else {
       const dayName = WEEKDAY_NAMES_RU[dayOfWeek];
-      const monthName = MONTH_NAMES_RU[localDate.getMonth()];
-      const dayNum = localDate.getDate();
+      const monthName = MONTH_NAMES_RU[monthIndex];
 
       const inlineKeyboard: Array<Array<{ text: string; web_app: { url: string } }>> = [];
 
       const taskLines = await Promise.all(
         tasks.map(async (t, idx) => {
-          const taskDate = new Date(t.dueDate);
-          const hours = String(taskDate.getHours()).padStart(2, "0");
-          const minutes = String(taskDate.getMinutes()).padStart(2, "0");
-          const hasTime = !(hours === "00" && minutes === "00");
-          const timeStr = hasTime ? `${hours}:${minutes}` : "В течение дня";
+          const { timeStr } = formatKazakhstanTaskTime(t.dueDate);
 
           let typeIcon = "📌";
           let typeName = "Задача";
@@ -270,7 +307,7 @@ export async function sendDailyTasksDigest(options: { force?: boolean } = {}): P
 
       replyMarkup = { inline_keyboard: inlineKeyboard };
 
-      messageText = `📋 <b>DAMA CRM: Сводка задач на сегодня</b>\n<i>${dayName}, ${dayNum} ${monthName} ${localDate.getFullYear()} г.</i>\n\n${taskLines.join("\n\n")}\n\n━━━━━━━━━━━━━━━━━━━━\nВсего задач: <b>${tasks.length}</b> • <i>Нажмите кнопку ниже для открытия сделки в Telegram Mini App</i>`;
+      messageText = `📋 <b>DAMA CRM: Сводка задач на сегодня</b>\n<i>${dayName}, ${dayNum} ${monthName} ${yearNum} г.</i>\n\n${taskLines.join("\n\n")}\n\n━━━━━━━━━━━━━━━━━━━━\nВсего задач: <b>${tasks.length}</b> • <i>Нажмите кнопку ниже для открытия сделки в Telegram Mini App</i>`;
     }
 
     const sendRes = await sendTelegramMessage(setting.botToken, setting.chatId, messageText, replyMarkup);

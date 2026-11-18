@@ -14,12 +14,10 @@ export async function GET() {
       return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    // Фоновая проверка утренней Telegram-сводки (в 09:45 Пн–Сб)
+    // Фоновая проверка утренней Telegram-сводки (в 09:45 Пн–Сб по времени Казахстана)
     try {
-      const { localDate, dayOfWeek } = getLocalTodayInfo();
+      const { hours, minutes, dayOfWeek } = getLocalTodayInfo();
       if (dayOfWeek !== 0) {
-        const hours = localDate.getHours();
-        const minutes = localDate.getMinutes();
         if ((hours === 9 && minutes >= 45) || hours > 9) {
           sendDailyTasksDigest().catch(() => {});
         }
