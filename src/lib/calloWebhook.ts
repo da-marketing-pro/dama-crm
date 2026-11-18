@@ -385,6 +385,8 @@ export async function processCalloLeadWebhook(
       statusCode: 200,
       ping: true,
       warning: "ct_phone_missing",
+      message:
+        "Вебхук получен CRM (200 OK), но номер абонента пустой. В Callo переключите «Метод» на GET либо вставьте JSON через ссылку «Своё тело запроса (JSON) — для профессионалов».",
       receivedKeys: Object.keys(rawParams).filter(
         (k) => !/token|secret|password|auth/i.test(k)
       ),
@@ -633,5 +635,8 @@ export async function processCalloLeadWebhook(
     phone: cleanPhone,
     pipelineName: targetPipeline?.name,
     stageName: targetStage?.name,
+    message: createdDeal
+      ? `Лид успешно добавлен в CRM: ${cleanPhone} → «${targetPipeline?.name}» / «${targetStage?.name}»`
+      : `Лид обновлен в CRM: ${cleanPhone} в «${targetPipeline?.name || "CRM"}»`,
   };
 }
