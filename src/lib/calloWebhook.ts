@@ -336,44 +336,74 @@ export async function ensureAutodialerStageIsUnsorted() {
 
   if (!targetPipeline) return null;
 
-  let targetStage = targetPipeline.stages.find((s) =>
+  let stages = await prisma.stage.findMany({
+    where: { pipelineId: targetPipeline.id },
+    orderBy: { order: "asc" },
+  });
+
+  let newLeadStage = stages.find(
+    (s) => s.name.trim().toLowerCase() === "новый лид"
+  );
+  let unsortedStage = stages.find((s) =>
     s.name.trim().toLowerCase().includes("неразобран")
   );
 
-  // Если этапа с корнем «неразобран» нет, переименовываем первый этап («Новый лид») в «Неразобранные»
-  if (!targetStage) {
-    const candidateStage =
-      targetPipeline.stages.find((s) =>
-        s.name.trim().toLowerCase().includes("новый лид")
-      ) ||
-      targetPipeline.stages.find((s) => s.type === "OPEN") ||
-      targetPipeline.stages[0];
+  // Если этап "Новый лид" отсутствует (был ранее переименован в "Неразобранные"), восстанавливаем его обратно,
+  // чтобы все сделки, с которыми уже работает пользователь, вернулись на этап "Новый лид"
+  if (!newLeadStage && unsortedStage) {
+    newLeadStage = await prisma.stage.update({
+      where: { id: unsortedStage.id },
+      data: { name: "Новый лид" },
+    });
+    unsortedStage = undefined;
+  }
 
-    if (candidateStage) {
-      targetStage = await prisma.stage.update({
-        where: { id: candidateStage.id },
-        data: { name: "Неразобранные" },
-      });
-    }
-  } else {
-    // Если отдельный этап «Неразобранные» есть, проверяем, не остались ли в «Новый лид» лиды автообзвона
-    const oldStage = targetPipeline.stages.find(
-      (s) =>
-        s.id !== targetStage!.id &&
-        s.name.trim().toLowerCase().includes("новый лид")
+  // Создаем отдельный этап "Неразобранные" для новых откликов, если его еще нет
+  if (!unsortedStage) {
+    unsortedStage = await prisma.stage.create({
+      data: {
+        name: "Неразобранные",
+        color: "#64748B",
+        order: 1,
+        type: "OPEN",
+        pipelineId: targetPipeline.id,
+      },
+    });
+  }
+
+  // Обновляем правильный порядок этапов в воронке:
+  // 1. Неразобранные (для входящих откликов)
+  // 2. Новый лид (для сделок в работе)
+  // 3. Отправлено первое сообщение в Ватсапп
+  // ...
+  const desiredOrder = [
+    "Неразобранные",
+    "Новый лид",
+    "Отправлено первое сообщение в Ватсапп",
+    "Первичная диагностика",
+    "Презентация КП",
+    "Согласование договора",
+    "Успешно реализовано",
+    "Закрыто и не реализовано",
+  ];
+
+  const currentStages = await prisma.stage.findMany({
+    where: { pipelineId: targetPipeline.id },
+  });
+
+  for (let i = 0; i < desiredOrder.length; i++) {
+    const match = currentStages.find(
+      (s) => s.name.trim().toLowerCase() === desiredOrder[i].toLowerCase()
     );
-    if (oldStage) {
-      await prisma.deal.updateMany({
-        where: {
-          pipelineId: targetPipeline.id,
-          stageId: oldStage.id,
-        },
-        data: { stageId: targetStage.id },
+    if (match && match.order !== i + 1) {
+      await prisma.stage.update({
+        where: { id: match.id },
+        data: { order: i + 1 },
       });
     }
   }
 
-  return { targetPipeline, targetStage };
+  return { targetPipeline, targetStage: unsortedStage };
 }
 
 export async function processCalloLeadWebhook(
@@ -587,9 +617,9 @@ export async function processCalloLeadWebhook(
 
     if (existingOpenDeal) {
       dealId = existingOpenDeal.id;
-      // Если у контакта уже была открытая сделка, перемещаем её на начальный этап («Новый лид»),
-      // чтобы новый отклик сразу появился в начале воронки для распределения
-      if (existingOpenDeal.stageId !== targetStage.id) {
+      // Если сделка уже взята в работу менеджером (на этапе "Новый лид" и далее),
+      // не сбрасываем её обратно в "Неразобранные", чтобы не сбивать рабочий процесс.
+      if (existingOpenDeal.stage.order <= 1 && existingOpenDeal.stageId !== targetStage.id) {
         await prisma.deal.update({
           where: { id: existingOpenDeal.id },
           data: {
