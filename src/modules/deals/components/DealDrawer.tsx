@@ -55,6 +55,7 @@ import {
   ExternalLink,
   Send,
   ChevronDown,
+  ArrowDown,
   CreditCard,
   MessageSquare,
   FileText,
@@ -220,6 +221,24 @@ export function DealDrawer({
   const [editingTask, setEditingTask] = useState<TaskEditableData | null>(null);
 
   // Actions & Feed state
+  const feedContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+
+  const handleFeedScroll = () => {
+    if (!feedContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = feedContainerRef.current;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    setShowScrollBottomBtn(distanceFromBottom > 120);
+  };
+
+  const scrollToBottom = (smooth = true) => {
+    if (!feedContainerRef.current) return;
+    feedContainerRef.current.scrollTo({
+      top: feedContainerRef.current.scrollHeight,
+      behavior: smooth ? "smooth" : "instant",
+    });
+  };
+
   const [notes, setNotes] = useState<DealNoteItem[]>(deal.contact.notes || []);
   const [newNoteContent, setNewNoteContent] = useState("");
   const [isNoteSubmitting, setIsNoteSubmitting] = useState(false);
@@ -644,8 +663,8 @@ export function DealDrawer({
       });
     });
 
-    // Sort descending (newest first)
-    items.sort((a, b) => b.date.getTime() - a.date.getTime());
+    // Sort ascending (chronological: oldest events at top, latest/newest near the bottom)
+    items.sort((a, b) => a.date.getTime() - b.date.getTime());
 
     // Search filter
     if (feedSearch.trim()) {
@@ -659,6 +678,16 @@ export function DealDrawer({
 
     return items;
   }, [notes, deal.tasks, deal.payments, feedSearch]);
+
+  // Auto-scroll feed to bottom so latest events (ближайшие к настоящему моменту) are in view
+  useEffect(() => {
+    if (rightView === "feed") {
+      const timer = setTimeout(() => {
+        scrollToBottom(false);
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [rightView, timelineItems.length, deal.id]);
 
   // Standard AmoCRM static fields reference
   const standardDealFields = useMemo(() => [
@@ -2325,22 +2354,27 @@ export function DealDrawer({
               </div>
             ) : (
               <>
-                {/* Scrollable AmoCRM Activity Feed */}
-                <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                  {/* Date separator: Сегодня */}
-                  <div className="relative flex items-center justify-center">
-                    <div className="border-t border-[#1b324d] w-full" />
-                    <span className="bg-[#162838] border border-[#223c56] text-[11px] font-semibold text-slate-400 px-3 py-0.5 rounded-full absolute">
-                      События сделки
-                    </span>
-                  </div>
-
-                  {timelineItems.length === 0 ? (
-                    <div className="text-center py-12 text-slate-500 text-xs">
-                      Нет событий или примечаний по этой сделке
+                <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
+                  {/* Scrollable AmoCRM Activity Feed */}
+                  <div
+                    ref={feedContainerRef}
+                    onScroll={handleFeedScroll}
+                    className="flex-1 overflow-y-auto p-5 space-y-4"
+                  >
+                    {/* Date separator: Начало истории */}
+                    <div className="relative flex items-center justify-center">
+                      <div className="border-t border-[#1b324d] w-full" />
+                      <span className="bg-[#162838] border border-[#223c56] text-[11px] font-semibold text-slate-400 px-3 py-0.5 rounded-full absolute">
+                        Начало истории сделки
+                      </span>
                     </div>
-                  ) : (
-                    timelineItems.map((item) => {
+
+                    {timelineItems.length === 0 ? (
+                      <div className="text-center py-12 text-slate-500 text-xs">
+                        Нет событий или примечаний по этой сделке
+                      </div>
+                    ) : (
+                      timelineItems.map((item) => {
                       if (item.type === "audit") {
                         return (
                           <div
@@ -2536,7 +2570,21 @@ export function DealDrawer({
                   )}
                 </div>
 
-                {/* ====== DOCKED AMO COMPOSER ====== */}
+                {/* Floating scroll-to-bottom button when scrolled up */}
+                {showScrollBottomBtn && (
+                  <button
+                    type="button"
+                    onClick={() => scrollToBottom(true)}
+                    className="absolute bottom-3 right-5 z-20 px-3 py-1.5 rounded-full bg-blue-600/90 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg backdrop-blur-xs flex items-center gap-1.5 transition-all cursor-pointer animate-in fade-in slide-in-from-bottom-2 border border-blue-400/30"
+                    title="Перейти к последним событиям"
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" />
+                    <span>К последним</span>
+                  </button>
+                )}
+              </div>
+
+              {/* ====== DOCKED AMO COMPOSER ====== */}
                 <div className="p-4 bg-[#0d1b2a] border-t border-[#1b324d] shrink-0 space-y-3">
                   {/* Composer Mode Selector: Примечание | Задача | Оплата | WhatsApp */}
                   <div className="flex items-center gap-2 border-b border-[#1b324d] pb-2 text-xs">
