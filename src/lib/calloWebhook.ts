@@ -323,6 +323,59 @@ export async function saveLastCalloWebhookDebug(
   }
 }
 
+export async function ensureAutodialerStageIsUnsorted() {
+  const allPipelines = await prisma.pipeline.findMany({
+    include: { stages: { orderBy: { order: "asc" } } },
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+  });
+
+  const targetPipeline =
+    allPipelines.find((p) => p.name.trim().toLowerCase().includes("холодный автообзвон")) ||
+    allPipelines.find((p) => p.isDefault) ||
+    allPipelines[0];
+
+  if (!targetPipeline) return null;
+
+  let targetStage = targetPipeline.stages.find((s) =>
+    s.name.trim().toLowerCase().includes("неразобран")
+  );
+
+  // Если этапа с корнем «неразобран» нет, переименовываем первый этап («Новый лид») в «Неразобранные»
+  if (!targetStage) {
+    const candidateStage =
+      targetPipeline.stages.find((s) =>
+        s.name.trim().toLowerCase().includes("новый лид")
+      ) ||
+      targetPipeline.stages.find((s) => s.type === "OPEN") ||
+      targetPipeline.stages[0];
+
+    if (candidateStage) {
+      targetStage = await prisma.stage.update({
+        where: { id: candidateStage.id },
+        data: { name: "Неразобранные" },
+      });
+    }
+  } else {
+    // Если отдельный этап «Неразобранные» есть, проверяем, не остались ли в «Новый лид» лиды автообзвона
+    const oldStage = targetPipeline.stages.find(
+      (s) =>
+        s.id !== targetStage!.id &&
+        s.name.trim().toLowerCase().includes("новый лид")
+    );
+    if (oldStage) {
+      await prisma.deal.updateMany({
+        where: {
+          pipelineId: targetPipeline.id,
+          stageId: oldStage.id,
+        },
+        data: { stageId: targetStage.id },
+      });
+    }
+  }
+
+  return { targetPipeline, targetStage };
+}
+
 export async function processCalloLeadWebhook(
   rawParams: Record<string, string>,
   options?: {
@@ -520,20 +573,9 @@ export async function processCalloLeadWebhook(
   }
 
   // Находим воронку «Холодный автообзвон» и этап «Неразобранные»
-  const allPipelines = await prisma.pipeline.findMany({
-    include: { stages: { orderBy: { order: "asc" } } },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-  });
-
-  const targetPipeline =
-    allPipelines.find((p) => p.name.trim().toLowerCase().includes("холодный автообзвон")) ||
-    allPipelines.find((p) => p.isDefault) ||
-    allPipelines[0];
-
-  const targetStage =
-    targetPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("новый лид")) ||
-    targetPipeline?.stages.find((s) => s.name.trim().toLowerCase().includes("неразобран")) ||
-    targetPipeline?.stages[0];
+  const stageInfo = await ensureAutodialerStageIsUnsorted();
+  const targetPipeline = stageInfo?.targetPipeline;
+  const targetStage = stageInfo?.targetStage;
 
   let dealId: string | null = null;
   let createdDeal = false;

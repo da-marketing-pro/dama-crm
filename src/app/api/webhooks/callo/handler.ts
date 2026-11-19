@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  ensureAutodialerStageIsUnsorted,
   extractCalloParamsFromRequest,
   getDefaultWhatsappInstanceForCallo,
   processCalloLeadWebhook,
@@ -52,11 +53,14 @@ export async function handleCalloWebhookRequest(
         req.nextUrl.searchParams.has("status"));
 
     if (isInspection) {
+      const stageInfo = await ensureAutodialerStageIsUnsorted();
       return NextResponse.json({
         ok: true,
         instanceId: instance.id,
         instancePhone: instance.phoneNumber,
         lastCalloWebhook: instance.lastCalloWebhook,
+        targetPipeline: stageInfo?.targetPipeline?.name,
+        targetStage: stageInfo?.targetStage?.name,
       });
     }
 
