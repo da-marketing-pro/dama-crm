@@ -99,8 +99,9 @@ export function WhatsappSettingsView({
 
   // Webhook copy & Callo autodialer state
   const [copiedWebhook, setCopiedWebhook] = useState(false);
-  const [copiedCalloWebhook, setCopiedCalloWebhook] = useState(false);
-  const [copiedCalloPostback, setCopiedCalloPostback] = useState(false);
+  const [copiedCalloGetUrl, setCopiedCalloGetUrl] = useState(false);
+  const [copiedCalloPostUrl, setCopiedCalloPostUrl] = useState(false);
+  const [copiedCalloJson, setCopiedCalloJson] = useState(false);
   const [clientOrigin, setClientOrigin] = useState("https://crm.da-marketing.pro");
   const [calloTestPhone, setCalloTestPhone] = useState("+77015554433");
   const [isTestingCallo, setIsTestingCallo] = useState(false);
@@ -131,6 +132,16 @@ export function WhatsappSettingsView({
   const calloWebhookUrl = calloWebhookToken
     ? `${clientOrigin}/api/webhooks/callo/${calloWebhookToken}`
     : `${clientOrigin}/api/webhooks/callo`;
+
+  const calloGetWebhookUrl = `${calloWebhookUrl}?phone={ct_phone}&call_id={ct_call_id}&campaign_id={ct_campaign_id}&button_num={ct_button_num}&status={ct_status}`;
+
+  const calloJsonTemplate = `{
+  "phone": "{ct_phone}",
+  "call_id": "{ct_call_id}",
+  "campaign_id": "{ct_campaign_id}",
+  "button_num": "{ct_button_num}",
+  "status": "{ct_status}"
+}`;
 
   // Simulator State
   const [simPhone, setSimPhone] = useState("+7 (777) 123-45-67");
@@ -886,37 +897,37 @@ export function WhatsappSettingsView({
                     <span>💡 Настройка модального окна «Отправить вебхук» в Callo:</span>
                   </p>
                   <p className="leading-relaxed">
-                    В окне настройки реакции «В CRM (Вебхук)» выберите один из двух рабочих способов передачи данных:
+                    Callo поддерживает макросы подстановки <code>{`{ct_*}`}</code>. Выберите один из двух рабочих способов передачи данных звонка в CRM:
                   </p>
                 </div>
 
-                {/* Способ 1: Метод GET (самый простой и надежный) */}
-                <div className="space-y-1.5 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
+                {/* Способ 1: Метод GET (с макросами в URL) */}
+                <div className="space-y-2 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-[11px] font-bold text-emerald-950 flex items-center gap-1.5">
-                      <span>Способ 1: Метод «GET» (Рекомендуется — 1 клик)</span>
+                      <span>Способ 1: Метод «GET» (URL с макросами подстановки)</span>
                     </label>
                     <span className="text-[10px] text-emerald-800 font-semibold bg-emerald-100 px-2 py-0.5 rounded-full">
-                      Самый надёжный
+                      Самый простой
                     </span>
                   </div>
                   <p className="text-[11px] text-emerald-900 leading-relaxed">
-                    В модалке Callo переключите <b>Метод</b> на <code>GET</code> и вставьте чистый URL. Callo сам автоматически передаст номер клиента и данные звонка:
+                    В модалке Callo выберите <b>Метод: GET</b> и вставьте этот URL. Callo автоматически подставит реальный номер клиента и ID звонка:
                   </p>
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 px-3 py-2 bg-white border border-emerald-200 rounded-xl text-[11px] font-mono text-emerald-900 truncate select-all">
-                      {calloWebhookUrl}
+                    <code className="flex-1 px-3 py-2 bg-white border border-emerald-200 rounded-xl text-[10px] font-mono text-emerald-900 truncate select-all">
+                      {calloGetWebhookUrl}
                     </code>
                     <button
                       type="button"
                       onClick={() => {
-                        navigator.clipboard.writeText(calloWebhookUrl);
-                        setCopiedCalloPostback(true);
-                        setTimeout(() => setCopiedCalloPostback(false), 2000);
+                        navigator.clipboard.writeText(calloGetWebhookUrl);
+                        setCopiedCalloGetUrl(true);
+                        setTimeout(() => setCopiedCalloGetUrl(false), 2000);
                       }}
                       className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
                     >
-                      {copiedCalloPostback ? (
+                      {copiedCalloGetUrl ? (
                         <>
                           <Check className="w-3.5 h-3.5 text-white" />
                           <span>Скопировано!</span>
@@ -924,7 +935,7 @@ export function WhatsappSettingsView({
                       ) : (
                         <>
                           <Copy className="w-3.5 h-3.5" />
-                          <span>Копировать URL</span>
+                          <span>Копировать GET URL</span>
                         </>
                       )}
                     </button>
@@ -932,44 +943,93 @@ export function WhatsappSettingsView({
                 </div>
 
                 {/* Способ 2: Метод POST со своим JSON */}
-                <div className="space-y-1.5 p-3 rounded-xl bg-orange-50/60 border border-orange-200">
+                <div className="space-y-2 p-3 rounded-xl bg-orange-50/60 border border-orange-200">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-[11px] font-bold text-orange-950">
-                      Способ 2: Если оставляете Метод «POST»
+                      Способ 2: Метод «POST» (чистый URL + JSON-тело)
                     </label>
+                    <span className="text-[10px] text-orange-800 font-semibold bg-orange-100 px-2 py-0.5 rounded-full">
+                      Рекомендуется
+                    </span>
                   </div>
                   <p className="text-[11px] text-orange-900 leading-relaxed">
-                    В модалке Callo нажмите на синюю ссылку <b>«Своё тело запроса (JSON) — для профессионалов»</b> и вставьте этот JSON-шаблон:
+                    1. В Callo выберите <b>Метод: POST</b> и вставьте чистый URL:
                   </p>
-                  <pre className="p-2.5 bg-slate-900 text-slate-100 rounded-xl text-[10px] font-mono leading-relaxed overflow-x-auto select-all">{`{
-  "phone": "{phone}",
-  "ct_phone": "{ct_phone}",
-  "call_id": "{call_id}",
-  "ct_call_id": "{ct_call_id}",
-  "campaign_id": "{campaign_id}",
-  "button_num": "{button_num}",
-  "status": "{status}"
-}`}</pre>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-3 py-1.5 bg-white border border-orange-200 rounded-xl text-[10px] font-mono text-orange-950 truncate select-all">
+                      {calloWebhookUrl}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(calloWebhookUrl);
+                        setCopiedCalloPostUrl(true);
+                        setTimeout(() => setCopiedCalloPostUrl(false), 2000);
+                      }}
+                      className="px-2.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedCalloPostUrl ? (
+                        <>
+                          <Check className="w-3 h-3 text-white" />
+                          <span>Скопировано!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Копировать URL</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-orange-900 leading-relaxed pt-1">
+                    2. Нажмите на синюю ссылку <b>«Своё тело запроса (JSON) — для профессионалов»</b> и вставьте этот шаблон:
+                  </p>
+                  <div className="relative">
+                    <pre className="p-2.5 bg-slate-900 text-slate-100 rounded-xl text-[10px] font-mono leading-relaxed overflow-x-auto select-all">
+                      {calloJsonTemplate}
+                    </pre>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(calloJsonTemplate);
+                        setCopiedCalloJson(true);
+                        setTimeout(() => setCopiedCalloJson(false), 2000);
+                      }}
+                      className="absolute top-2 right-2 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedCalloJson ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span>Скопировано!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Копировать JSON</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed space-y-1">
                   <div className="font-bold text-amber-950 flex items-center gap-1.5">
-                    <span>🔍 Проверка работы прямо в Callo:</span>
+                    <span>⚠️ Почему чистый GET без параметров не работает:</span>
                   </div>
                   <p>
-                    После сохранения нажмите ссылку <b>«Отладка вебхуков: Посмотреть результат»</b> прямо в модальном окне Callo. Система покажет статус отправки и ответ CRM с подтверждением создания сделки.
+                    Если при методе <b>GET</b> указать адрес без вопросительного знака и параметров (<code>?phone={`{ct_phone}`}...</code>), Callo выполняет запрос вообще без данных, и CRM отклоняет его из-за отсутствия номера телефона.
                   </p>
                 </div>
 
                 <ul className="text-[11px] text-slate-600 space-y-1.5 list-disc list-inside leading-relaxed pt-1 border-t border-slate-200">
                   <li>
-                    В Callo откройте кампанию ➔ <strong>Сценарии IVR</strong> (нажатие цифры 1 или распознавание ответа) ➔ выберите действие <strong>«Вебхук во время звонка»</strong>.
+                    В Callo откройте кампанию ➔ <strong>Сценарии IVR</strong> (нажатие цифры 1 или распознавание ответа) ➔ выберите действие <strong>«В CRM (Вебхук)»</strong>.
                   </li>
                   <li>
-                    Вставьте ссылку из <strong>Варианта 1</strong>. Метод запроса: <strong>POST</strong> или <strong>GET</strong>.
+                    Используйте <strong>Способ 1 (GET с макросами)</strong> или <strong>Способ 2 (POST со своим JSON)</strong>.
                   </li>
                   <li>
-                    Рекомендуем также указать ссылку из <strong>Варианта 2</strong> в поле <strong>«Постбэки»</strong> в настройках кампании.
+                    Чекбокс <em>«Отправлять вебхук сразу при срабатывании, не дожидаясь окончания звонка»</em> оставьте включенным.
                   </li>
                 </ul>
               </div>
